@@ -182,9 +182,30 @@ const MUTANTS = [
   {
     name: "M24: Allow Retry Move on opponent blunders in CoachCard.tsx",
     file: "src/components/review/CoachCard.tsx",
-    target: "const canRetry =\n    !isOpponentMove &&\n    (badge === \"Blunder\" || badge === \"Mistake\" || badge === \"Miss\" || badge === \"Inaccuracy\");",
-    replacement:
-      "const canRetry =\n    badge === \"Blunder\" || badge === \"Mistake\" || badge === \"Miss\" || badge === \"Inaccuracy\";",
+    target: "const canRetry = !isOpponentMove && isErrorBadge;",
+    replacement: "const canRetry = isErrorBadge;",
+    testFile: "tests/ui-components.test.tsx",
+  },
+  {
+    name: "M25: Reuse error variationTitle (Punishment Line) as Show Best Move header in CoachCard.tsx",
+    file: "src/components/review/CoachCard.tsx",
+    target:
+      "const bestMoveHeader = isErrorBadge\n    ? \"Best Move Continuation\"\n    : isOpponentMove\n    ? \"Opponent's Best Continuation\"\n    : explanation?.variationTitle || \"How it could play out\";",
+    replacement: "const bestMoveHeader = explanation?.variationTitle || \"How it could play out\";",
+    testFile: "tests/ui-components.test.tsx",
+  },
+  {
+    name: "M26: Suppress terminalCheckmate flag in tracePvIntentions (coach-insights.ts)",
+    file: "src/lib/analysis/coach-insights.ts",
+    target: "    if (chess.isCheckmate()) {\n      checksDelivered += 1;\n      terminalCheckmate = true;\n      break;\n    }",
+    replacement: "    if (chess.isCheckmate()) {\n      checksDelivered += 1;\n      break;\n    }",
+    testFile: "tests/coach-insights.test.ts",
+  },
+  {
+    name: "M27: Skip rendering Sage character portrait in CoachAvatar.tsx",
+    file: "src/components/review/CoachAvatar.tsx",
+    target: '{personaId === "sage" && (\n          <g data-portrait="sage">',
+    replacement: '{false && personaId === "sage" && (\n          <g data-portrait="sage">',
     testFile: "tests/ui-components.test.tsx",
   },
 ];
