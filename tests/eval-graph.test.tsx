@@ -116,13 +116,17 @@ describe("EvalGraph interactive timeline (Recharts v3)", () => {
     expect(computeEvalZeroOffset([{ evalWhite: -4 }, { evalWhite: -1 }])).toBe(0);
   });
 
-  it("renders a 0.0 baseline label and phase transition indicator", () => {
+  it("renders a 0.0 baseline label centered at the y=0 reference line and wrapped legend even in one-sided games", () => {
     const moves = [
-      makeMove(1, "e4", 25),
-      { ...makeMove(2, "d4", 40), tacticalContext: { tags: [], isCheck: false, isCastle: false, gamePhase: "Middlegame" as const } },
+      makeMove(1, "e4", 450),
+      { ...makeMove(2, "d4", 780), tacticalContext: { tags: [], isCheck: false, isCastle: false, gamePhase: "Middlegame" as const } },
     ];
     render(<EvalGraph moves={moves} currentPly={1} onSelectPly={vi.fn()} />);
-    expect(screen.getByText("0.0")).toBeInTheDocument();
+    const zeroLabel = screen.getByText("0.0");
+    expect(zeroLabel).toBeInTheDocument();
+    // Fixed YAxis domain [-10, 10] places y=0 at midpoint (~50%), NOT gradient zeroOffsetPct (100% here)
+    expect(zeroLabel.getAttribute("style")).toContain("50%");
     expect(screen.getByText(/phase boundaries/i)).toBeInTheDocument();
+    expect(screen.getByText(/Mistake/i)).toBeInTheDocument();
   });
 });

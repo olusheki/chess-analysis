@@ -115,7 +115,7 @@ export function EvalGraph({ moves, currentPly, startEval, onSelectPly }: EvalGra
       <div className="relative h-28 w-full">
         <span
           className="pointer-events-none absolute left-1 z-10 -translate-y-1/2 rounded bg-[#21201d]/80 px-1 font-mono text-[9px] text-[#9e9c98]"
-          style={{ top: zeroOffsetPct }}
+          style={{ top: "calc(50% + 2px)" }}
         >
           0.0
         </span>
@@ -211,14 +211,15 @@ export function EvalGraph({ moves, currentPly, startEval, onSelectPly }: EvalGra
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <div className="mt-1 flex items-center justify-between text-[10px] text-[#9e9c98]">
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[10px] text-[#9e9c98]">
         <span className="inline-flex items-center gap-1">
           <span className="inline-block w-3 border-t border-dashed border-[#6b6863]" />
           Phase boundaries (Opening / Mid / End)
         </span>
         <span className="inline-flex items-center gap-2">
+          <span className="text-[#1baca6]">● Brilliant</span>
+          <span className="text-[#e65e2b]">● Mistake</span>
           <span className="text-[#fa412d]">● Blunder</span>
-          <span className="text-[#1baca6]">● Key</span>
         </span>
       </div>
     </div>

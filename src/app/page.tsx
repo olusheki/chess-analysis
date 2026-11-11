@@ -16,7 +16,11 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
-import { analyzeGame } from "@/lib/analysis/game-analyzer";
+import {
+  analyzeGame,
+  getFenTurn,
+  parseBaseClockFromHeader,
+} from "@/lib/analysis/game-analyzer";
 import { createBrowserStockfishEngine } from "@/lib/engine/stockfish-worker";
 import type { ChessEngine } from "@/lib/engine/engine-evaluator";
 import { formatEvalLabel } from "@/lib/engine/uci-parser";
@@ -45,19 +49,8 @@ interface CustomPvPreview {
   mate?: number;
   pvSan: string[];
   fenStart: string;
-}
-
-function parseBaseClockFromHeader(timeControl?: string): string | undefined {
-  if (!timeControl) return undefined;
-  const baseStr = timeControl.split("+")[0]?.trim();
-  const baseSec = Number.parseInt(baseStr ?? "", 10);
-  if (!Number.isFinite(baseSec) || baseSec <= 0) return undefined;
-  const hrs = Math.floor(baseSec / 3600);
-  const mins = Math.floor((baseSec % 3600) / 60);
-  const secs = baseSec % 60;
-  const secStr = String(secs).padStart(2, "0");
-  if (hrs > 0) return `${hrs}:${String(mins).padStart(2, "0")}:${secStr}`;
-  return `${mins}:${secStr}`;
+  ply: number;
+  runId: number;
 }
 
 function normalizeInputToPgn(raw: string): string {
@@ -128,10 +121,13 @@ export default function GameReviewPage() {
   const [previewCustomPv, setPreviewCustomPv] = useState<CustomPvPreview | null>(null);
   const [customPvStep, setCustomPvStep] = useState(0);
 
-  useEffect(() => {
-    setPreviewCustomPv(null);
-    setCustomPvStep(0);
-  }, [currentPly, analysisRunId, sidebarTab]);
+  const activeCustomPv =
+    sidebarTab === "analysis" &&
+    previewCustomPv &&
+    previewCustomPv.ply === currentPly &&
+    previewCustomPv.runId === analysisRunId
+      ? previewCustomPv
+      : null;
 
   const engineRef = useRef<ChessEngine | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -393,22 +389,22 @@ export default function GameReviewPage() {
       };
     }
 
-    if (sidebarTab === "analysis" && previewCustomPv) {
-      const c = new Chess(previewCustomPv.fenStart);
+    if (activeCustomPv) {
+      const c = new Chess(activeCustomPv.fenStart);
       let lastPreviewMove: { from: Square; to: Square } | null = null;
       const pvArrows: BoardArrow[] = [];
-      for (let i = 0; i < customPvStep && i < previewCustomPv.pvSan.length; i++) {
+      for (let i = 0; i < customPvStep && i < activeCustomPv.pvSan.length; i++) {
         try {
-          const mv = c.move(previewCustomPv.pvSan[i]);
+          const mv = c.move(activeCustomPv.pvSan[i]);
           if (mv) lastPreviewMove = { from: mv.from, to: mv.to };
         } catch {
           break;
         }
       }
-      if (customPvStep === 0 && previewCustomPv.pvSan[0]) {
+      if (customPvStep === 0 && activeCustomPv.pvSan[0]) {
         try {
-          const probe = new Chess(previewCustomPv.fenStart);
-          const first = probe.move(previewCustomPv.pvSan[0]);
+          const probe = new Chess(activeCustomPv.fenStart);
+          const first = probe.move(activeCustomPv.pvSan[0]);
           if (first) {
             pvArrows.push({ from: first.from, to: first.to, category: "best" });
           }
@@ -421,9 +417,9 @@ export default function GameReviewPage() {
         lastMove: lastPreviewMove,
         badge: null,
         arrows: pvArrows,
-        whiteCp: previewCustomPv.cp,
-        whiteMate: previewCustomPv.mate,
-        evalLabel: formatEvalLabel(previewCustomPv.cp, previewCustomPv.mate),
+        whiteCp: activeCustomPv.cp,
+        whiteMate: activeCustomPv.mate,
+        evalLabel: formatEvalLabel(activeCustomPv.cp, activeCustomPv.mate),
       };
     }
 
@@ -495,15 +491,14 @@ export default function GameReviewPage() {
       evalLabel: activeMove.evalLabel,
     };
   }, [
+    activeCustomPv,
     activeMove,
     analysis?.startEval,
     analysis?.startFen,
     bestMovePreviewIndex,
     customPvStep,
-    previewCustomPv,
     retryState,
     showBestMove,
-    sidebarTab,
   ]);
 
   const whiteName = analysis?.headers.White || "White";
@@ -648,7 +643,7 @@ export default function GameReviewPage() {
       {/* Main Two-Column Chess.com Workspace */}
       <main className="mx-auto grid max-w-[1320px] grid-cols-1 gap-4 p-3 sm:p-4 lg:grid-cols-[minmax(0,1fr)_440px] lg:grid-rows-[minmax(0,1fr)_auto] lg:items-start lg:gap-x-5 lg:gap-y-3">
         {/* Left/Center Column: Eval Bar + Player Bars + Chessboard */}
-        <section className="order-1 flex flex-col items-center lg:col-start-1 lg:row-span-2 lg:row-start-1">
+        <section className="order-1 flex flex-col items-center lg:sticky lg:top-4 lg:col-start-1 lg:row-span-2 lg:row-start-1">
           <div className="w-full max-w-[640px]">
             {/* Top Player Plate */}
             <div className="mb-2 flex items-center justify-between gap-2 rounded bg-[#262522] px-3 py-1.5 text-xs">
@@ -672,8 +667,7 @@ export default function GameReviewPage() {
                 const topIsWhite = boardFlipped;
                 const topClock = topIsWhite ? playerClocks.w : playerClocks.b;
                 const topTurnActive =
-                  analysis &&
-                  (currentPly % 2 === 0 ? topIsWhite : !topIsWhite);
+                  analysis && getFenTurn(boardView.fen) === (topIsWhite ? "w" : "b");
                 if (topClock) {
                   return (
                     <span
@@ -754,8 +748,7 @@ export default function GameReviewPage() {
                 const bottomIsWhite = !boardFlipped;
                 const bottomClock = bottomIsWhite ? playerClocks.w : playerClocks.b;
                 const bottomTurnActive =
-                  analysis &&
-                  (currentPly % 2 === 0 ? bottomIsWhite : !bottomIsWhite);
+                  analysis && getFenTurn(boardView.fen) === (bottomIsWhite ? "w" : "b");
                 if (bottomClock) {
                   return (
                     <span
@@ -789,7 +782,7 @@ export default function GameReviewPage() {
         </section>
 
         {/* Right Sidebar Scrollable Workspace */}
-        <aside className="order-3 flex min-w-0 flex-col gap-3 rounded-lg border border-[#3d3b38] bg-[#262522] p-3 shadow-2xl lg:col-start-2 lg:row-start-1 lg:max-h-[calc(100vh-11.25rem)] lg:overflow-hidden">
+        <aside className="order-3 flex min-w-0 flex-col gap-3 rounded-lg border border-[#3d3b38] bg-[#262522] p-3 shadow-2xl lg:col-start-2 lg:row-start-1">
           {/* Progress / Error Banner */}
           {analysisStatus === "analyzing" && (
             <div className="rounded border border-[#96bc4b]/40 bg-[#21201d] p-3">
@@ -846,7 +839,7 @@ export default function GameReviewPage() {
           </div>
 
           {analysis && (
-            <div className="min-h-0 flex-1 space-y-3 lg:overflow-y-auto lg:pr-1">
+            <div className="min-h-0 flex-1 space-y-3">
               {sidebarTab === "review" && (
                 <div className="flex flex-col gap-3">
                   <div className="order-2 lg:order-1">
@@ -931,11 +924,11 @@ export default function GameReviewPage() {
                         return (
                           <div className="mt-2 space-y-2 text-xs">
                             <div className="text-[10px] text-[#9e9c98]">
-                              Click any line to preview on board ({previewCustomPv ? `Previewing PV${previewCustomPv.multipv}` : "top variations"})
+                              Click any line to preview on board ({activeCustomPv ? `Previewing PV${activeCustomPv.multipv}` : "top variations"})
                             </div>
                             {pvLines.slice(0, 3).map((line, i) => {
                               const label = formatEvalLabel(line.cp, line.mate);
-                              const isSelected = previewCustomPv?.multipv === line.multipv;
+                              const isSelected = activeCustomPv?.multipv === line.multipv;
                               const colorClass =
                                 i === 0
                                   ? "text-[#96bc4b]"
@@ -965,6 +958,8 @@ export default function GameReviewPage() {
                                             mate: line.mate,
                                             pvSan: line.pvSan,
                                             fenStart,
+                                            ply: currentPly,
+                                            runId: analysisRunId,
                                           });
                                           setCustomPvStep(Math.min(1, line.pvSan.length));
                                         }
@@ -1021,6 +1016,8 @@ export default function GameReviewPage() {
                                             mate: line.mate,
                                             pvSan: line.pvSan,
                                             fenStart,
+                                            ply: currentPly,
+                                            runId: analysisRunId,
                                           });
                                           setCustomPvStep(idx + 1);
                                         }}
@@ -1122,7 +1119,7 @@ export default function GameReviewPage() {
 
         {/* Persistent Navigation Bar: right below board on mobile, pinned below sidebar on desktop */}
         {analysis && (
-          <div className="order-2 rounded-lg border border-[#3d3b38] bg-[#262522] p-2.5 shadow-xl lg:col-start-2 lg:row-start-2">
+          <div className="order-2 rounded-lg border border-[#3d3b38] bg-[#262522] p-2.5 shadow-xl lg:sticky lg:bottom-3 lg:z-20 lg:col-start-2 lg:row-start-2">
             <NavigationBar
               currentPly={currentPly}
               totalPlies={analysis.moves.length}

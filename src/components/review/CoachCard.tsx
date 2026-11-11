@@ -299,7 +299,10 @@ export function CoachCard({
                   ? "Coach is examining the position..."
                   : explanation?.shortComment
                   ? formatProse(explanation.shortComment)
-                  : `${formatNotationPair(moveSan, plainEnglish)} is rated ${badge}.`}
+                  : (() => {
+                      const raw = `${formatNotationPair(moveSan, plainEnglish)} is rated ${badge}.`;
+                      return raw ? raw[0].toUpperCase() + raw.slice(1) : raw;
+                    })()}
               </p>
               <p className="mt-1 text-xs leading-relaxed text-[#c9c7c3]">
                 {formatProse(explanation?.detailedExplanation)}

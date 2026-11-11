@@ -27,7 +27,7 @@ export function EvalBar({ whiteCp, whiteMate, evalLabel, flipped = false }: Eval
 
   return (
     <div
-      className="relative flex h-full w-7 shrink-0 flex-col overflow-hidden rounded-sm border border-[#3d3b38] bg-[#262522] select-none"
+      className="relative flex h-full w-6 shrink-0 flex-col overflow-hidden rounded-sm border border-[#3d3b38] bg-[#262522] select-none sm:w-7"
       aria-label={`Evaluation ${evalLabel}`}
     >
       {/* When not flipped, Black is at top and White fills from bottom */}

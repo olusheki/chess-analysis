@@ -662,6 +662,46 @@ describe("UI components & visual geometry", () => {
       );
       expect(screen.getByText(/Philidor Defense/i)).toBeInTheDocument();
       expect(screen.getByText(/Reviewed/i)).toBeInTheDocument();
+
+      cleanup();
+      render(
+        <CoachCard
+          personaId="danny"
+          coachColor="white"
+          plainEnglish={true}
+          moveNumber={12}
+          playedBy="Black"
+          moveSan="Nxb4"
+          badge="Blunder"
+          bestMoveSan="g8+"
+          bestMovePvSan={["g8+"]}
+          explanation={null}
+          retryState={{
+            active: false,
+            ply: null,
+            fen: null,
+            targetUci: null,
+            targetSan: null,
+            status: "idle",
+            feedback: null,
+            attempts: 0,
+          }}
+          showBestMove={false}
+          bestMovePreviewIndex={0}
+          onStartRetry={vi.fn()}
+          onExitRetry={vi.fn()}
+          onToggleBestMove={vi.fn()}
+          onStepBestMove={vi.fn()}
+        />
+      );
+      expect(screen.getByText("Knight takes b4 (Nxb4) is rated Blunder.")).toBeInTheDocument();
+
+      cleanup();
+      render(<EvalBar whiteCp={120} evalLabel="+1.2" />);
+      const evalClasses = screen.getByLabelText("Evaluation +1.2").className.split(/\s+/);
+      expect(evalClasses).toContain("w-6");
+      expect(evalClasses).toContain("sm:w-7");
+      expect(evalClasses).not.toContain("w-7");
     });
   });
 });
