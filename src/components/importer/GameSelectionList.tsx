@@ -55,15 +55,26 @@ export function GameSelectionList({ games, onSelectGame }: GameSelectionListProp
                 </div>
                 <div className="text-[10px] text-[#9e9c98]">
                   {g.timeClass} • {g.date}
+                  {g.openingName ? ` • ${g.openingName}` : ""}
                 </div>
               </div>
             </div>
 
-            <span
-              className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase ${badgeStyles}`}
-            >
-              {g.result}
-            </span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {g.hasChessComAccuracy && (
+                <span
+                  title="Game Review already available on Chess.com"
+                  className="rounded border border-[#5c8bb0]/40 bg-[#5c8bb0]/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-[#82b6de]"
+                >
+                  Reviewed
+                </span>
+              )}
+              <span
+                className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase ${badgeStyles}`}
+              >
+                {g.result}
+              </span>
+            </div>
           </button>
         );
       })}

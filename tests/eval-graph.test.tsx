@@ -115,4 +115,14 @@ describe("EvalGraph interactive timeline (Recharts v3)", () => {
     // All negative => 0.0 (dark gradient spans whole chart)
     expect(computeEvalZeroOffset([{ evalWhite: -4 }, { evalWhite: -1 }])).toBe(0);
   });
+
+  it("renders a 0.0 baseline label and phase transition indicator", () => {
+    const moves = [
+      makeMove(1, "e4", 25),
+      { ...makeMove(2, "d4", 40), tacticalContext: { tags: [], isCheck: false, isCastle: false, gamePhase: "Middlegame" as const } },
+    ];
+    render(<EvalGraph moves={moves} currentPly={1} onSelectPly={vi.fn()} />);
+    expect(screen.getByText("0.0")).toBeInTheDocument();
+    expect(screen.getByText(/phase boundaries/i)).toBeInTheDocument();
+  });
 });

@@ -8,15 +8,15 @@ interface EvalBarProps {
 }
 
 /**
- * Exact Chess.com evaluation bar height percentage for White:
- * h_white = clamp(50 + 50 * tanh(0.00184 * cp), 3%, 97%)
+ * Calibrated Chess.com-like evaluation bar height percentage for White:
+ * h_white = clamp(50 + 50 * tanh(0.0026 * cp), 3%, 97%)
  * Forced mates clamp to 100% (White mates) or 0% (Black mates).
  */
 export function computeWhiteBarPercent(whiteCp: number, whiteMate?: number): number {
   if (whiteMate !== undefined && whiteMate !== 0) {
     return whiteMate > 0 ? 100 : 0;
   }
-  const raw = 50 + 50 * Math.tanh(0.00184 * whiteCp);
+  const raw = 50 + 50 * Math.tanh(0.0026 * whiteCp);
   return Math.min(97, Math.max(3, raw));
 }
 

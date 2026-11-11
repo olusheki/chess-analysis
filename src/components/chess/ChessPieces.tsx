@@ -5,15 +5,21 @@ interface ChessPieceSvgProps {
   color: Color;
   type: PieceSymbol;
   className?: string;
+  darkSurfaceContrast?: boolean;
 }
 
 /**
  * Crisp Neo-style vector SVG chess pieces matching Chess.com's visual contrast.
  */
-export function ChessPieceSvg({ color, type, className = "w-full h-full" }: ChessPieceSvgProps) {
+export function ChessPieceSvg({
+  color,
+  type,
+  className = "w-full h-full",
+  darkSurfaceContrast = false,
+}: ChessPieceSvgProps) {
   const isWhite = color === "w";
-  const fill = isWhite ? "#ffffff" : "#242220";
-  const stroke = isWhite ? "#1e1c1a" : "#0b0a09";
+  const fill = isWhite ? "#ffffff" : darkSurfaceContrast ? "#3a3733" : "#242220";
+  const stroke = isWhite ? "#1e1c1a" : darkSurfaceContrast ? "#8d8881" : "#0b0a09";
   const detailStroke = isWhite ? "#2b2825" : "#d8d6d2";
 
   switch (type) {

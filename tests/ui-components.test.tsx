@@ -5,12 +5,14 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { computeArrowGeometry } from "@/components/chess/BoardOverlays";
 import { computeWhiteBarPercent, EvalBar } from "@/components/chess/EvalBar";
 import { Chessboard } from "@/components/chess/Chessboard";
+import { ChessPieceSvg } from "@/components/chess/ChessPieces";
 import { NavigationBar } from "@/components/review/NavigationBar";
 import { AccuracyHeader } from "@/components/review/AccuracyHeader";
 import { MoveBadgeSummary } from "@/components/review/MoveBadgeSummary";
 import { CoachCard } from "@/components/review/CoachCard";
 import { MoveListReview } from "@/components/review/MoveListReview";
 import { UsernameImporter } from "@/components/importer/UsernameImporter";
+import { GameSelectionList } from "@/components/importer/GameSelectionList";
 
 describe("UI components & visual geometry", () => {
   beforeEach(() => {
@@ -49,6 +51,7 @@ describe("UI components & visual geometry", () => {
   describe("EvalBar formula and rendering", () => {
     it("computes 50% at 0cp, clamps between 3% and 97% for finite evals, and 100/0 for mate", () => {
       expect(computeWhiteBarPercent(0)).toBeCloseTo(50, 2);
+      expect(computeWhiteBarPercent(260)).toBeGreaterThanOrEqual(77);
       expect(computeWhiteBarPercent(10000)).toBe(97);
       expect(computeWhiteBarPercent(-10000)).toBe(3);
       expect(computeWhiteBarPercent(0, 3)).toBe(100);
@@ -206,11 +209,13 @@ describe("UI components & visual geometry", () => {
 
     it("CoachCard shows Retry Move and Show Best Move controls for errors", () => {
       const onRetry = vi.fn();
+      const onPunish = vi.fn();
       const onToggleBest = vi.fn();
 
-      render(
+      const { rerender } = render(
         <CoachCard
           personaId="danny"
+          coachColor="black"
           moveNumber={14}
           playedBy="Black"
           moveSan="Qe7"
@@ -237,6 +242,8 @@ describe("UI components & visual geometry", () => {
           showBestMove={false}
           bestMovePreviewIndex={0}
           onStartRetry={onRetry}
+          onPunishError={onPunish}
+          canPunishError={true}
           onExitRetry={vi.fn()}
           onToggleBestMove={onToggleBest}
           onStepBestMove={vi.fn()}
@@ -244,10 +251,52 @@ describe("UI components & visual geometry", () => {
       );
 
       expect(screen.getByText("You left your Knight on d7 hanging!")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+      fireEvent.click(screen.getByRole("button", { name: /retry move/i }));
       fireEvent.click(screen.getByRole("button", { name: /show best move/i }));
       expect(onRetry).toHaveBeenCalledTimes(1);
       expect(onToggleBest).toHaveBeenCalledTimes(1);
+
+      // When reviewing opponent's blunder (coachColor=black, playedBy=White), hide Retry Move and show Punish Error
+      rerender(
+        <CoachCard
+          personaId="danny"
+          coachColor="black"
+          moveNumber={8}
+          playedBy="White"
+          moveSan="Bb5+"
+          badge="Mistake"
+          evalLabel="-1.9"
+          bestMoveSan="d3"
+          bestMovePvSan={["d3", "Nf6"]}
+          explanation={{
+            badge: "Mistake",
+            shortComment: "Bb5+ allows c6 with tempo.",
+            detailedExplanation: "White dropped initiative.",
+          }}
+          retryState={{
+            active: false,
+            ply: null,
+            fen: null,
+            targetUci: null,
+            targetSan: null,
+            status: "idle",
+            feedback: null,
+            attempts: 0,
+          }}
+          showBestMove={false}
+          bestMovePreviewIndex={0}
+          onStartRetry={onRetry}
+          onPunishError={onPunish}
+          canPunishError={true}
+          onExitRetry={vi.fn()}
+          onToggleBestMove={onToggleBest}
+          onStepBestMove={vi.fn()}
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: /retry move/i })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /punish error/i }));
+      expect(onPunish).toHaveBeenCalledTimes(1);
     });
 
     it("M4: MoveBadgeSummary renders Forced badge row and '—' for 0-move phases; CoachCard caps PV stepper at rendered pills", () => {
@@ -519,6 +568,100 @@ describe("UI components & visual geometry", () => {
       );
       expect(screen.getByTestId("chessboard-grid")).toBe(boardSurface);
       expect(screen.queryByTestId("legal-dot-e4")).toBeNull();
+    });
+
+    it("renders CoachCard in Plain English by default before SAN and toggles cleanly between Plain English and SAN", () => {
+      const onChangePlainEnglish = vi.fn();
+      const props = {
+        personaId: "danny" as const,
+        coachColor: "white" as const,
+        onChangePlainEnglish,
+        moveNumber: 12,
+        playedBy: "Black" as const,
+        moveSan: "Nxb4",
+        badge: "Blunder" as const,
+        bestMoveSan: "g8+",
+        bestMovePvSan: ["g8+", "Kg1"],
+        explanation: {
+          badge: "Blunder" as const,
+          shortComment: "Your opponent blundered with Nxb4!",
+          detailedExplanation: "Better was g8+ instead of Nxb4.",
+          bestMoveReasoning: "g8+ forces king movement.",
+          coachMode: "offline" as const,
+        },
+        retryState: {
+          active: false,
+          ply: null,
+          fen: null,
+          targetUci: null,
+          targetSan: null,
+          status: "idle" as const,
+          feedback: null,
+          attempts: 0,
+        },
+        showBestMove: true,
+        bestMovePreviewIndex: 1,
+        onStartRetry: vi.fn(),
+        onExitRetry: vi.fn(),
+        onToggleBestMove: vi.fn(),
+        onStepBestMove: vi.fn(),
+      };
+
+      const { rerender } = render(<CoachCard {...props} plainEnglish={true} />);
+      expect(screen.getByText("knight takes b4")).toBeInTheDocument();
+      expect(screen.getByText("(Nxb4)")).toBeInTheDocument();
+      expect(screen.getByText("Your opponent blundered with knight takes b4!")).toBeInTheDocument();
+      expect(screen.getByText("Better was pawn g8 check instead of knight takes b4.")).toBeInTheDocument();
+      expect(screen.getByText(/Best was pawn g8 check \(g8\+\):/)).toBeInTheDocument();
+      expect(screen.getByText("pawn g8 check")).toBeInTheDocument();
+      expect(screen.getByText("king g1")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Simple notation (SAN)" }));
+      expect(onChangePlainEnglish).toHaveBeenCalledWith(false);
+
+      rerender(<CoachCard {...props} plainEnglish={false} />);
+      expect(screen.getByText("Your opponent blundered with Nxb4!")).toBeInTheDocument();
+      expect(screen.getByText("Better was g8+ instead of Nxb4.")).toBeInTheDocument();
+      expect(screen.getByText("Kg1")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Plain English notation" }));
+      expect(onChangePlainEnglish).toHaveBeenCalledWith(true);
+    });
+
+    it("renders captured dark ChessPieceSvg with high-contrast stroke on dark plates and shows ECO/reviewed badges in GameSelectionList", () => {
+      const { container } = render(
+        <ChessPieceSvg color="b" type="n" darkSurfaceContrast={true} />
+      );
+      const html = container.innerHTML;
+      expect(html).not.toContain("#0b0a09");
+      expect(html).toContain("#8d8881");
+
+      cleanup();
+
+      render(
+        <GameSelectionList
+          games={[
+            {
+              id: "g1",
+              opponent: "Coach-David",
+              opponentRating: 400,
+              userRating: 800,
+              userColor: "white",
+              result: "win",
+              resultDetail: "resigned",
+              timeControl: "600",
+              timeClass: "rapid",
+              date: "Nov 10, 2026",
+              pgn: "1. e4 e5 1-0",
+              openingName: "Philidor Defense",
+              hasChessComAccuracy: true,
+            },
+          ]}
+          onSelectGame={vi.fn()}
+        />
+      );
+      expect(screen.getByText(/Philidor Defense/i)).toBeInTheDocument();
+      expect(screen.getByText(/Reviewed/i)).toBeInTheDocument();
     });
   });
 });

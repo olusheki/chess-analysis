@@ -7,11 +7,18 @@ import type { CoachExplanationResponse, GameStorylineResponse } from "@/lib/ai/g
 import { CoachPersonaId, getCoachPersona } from "@/lib/ai/coach-personas";
 import type { RetryState } from "@/lib/store/useReviewStore";
 import { MoveBadgeIcon } from "@/components/chess/MoveBadgeIcon";
+import {
+  formatCoachProse,
+  formatNotationPair,
+  sanToPlainEnglish,
+} from "@/lib/chess/plain-notation";
 
 interface CoachCardProps {
   personaId: CoachPersonaId;
   coachColor?: "white" | "black";
   onChangeCoachColor?: (color: "white" | "black") => void;
+  plainEnglish?: boolean;
+  onChangePlainEnglish?: (enabled: boolean) => void;
   moveNumber?: number;
   playedBy?: "White" | "Black";
   moveSan?: string;
@@ -27,7 +34,9 @@ interface CoachCardProps {
   showBestMove: boolean;
   bestMovePreviewIndex: number;
   loadingExplanation?: boolean;
+  canPunishError?: boolean;
   onStartRetry: () => void;
+  onPunishError?: () => void;
   onExitRetry: () => void;
   onToggleBestMove: () => void;
   onStepBestMove: (delta: number) => void;
@@ -56,6 +65,8 @@ export function CoachCard({
   personaId,
   coachColor = "white",
   onChangeCoachColor,
+  plainEnglish = true,
+  onChangePlainEnglish,
   moveNumber,
   playedBy,
   moveSan,
@@ -71,7 +82,9 @@ export function CoachCard({
   showBestMove,
   bestMovePreviewIndex,
   loadingExplanation = false,
+  canPunishError = false,
   onStartRetry,
+  onPunishError,
   onExitRetry,
   onToggleBestMove,
   onStepBestMove,
@@ -79,31 +92,68 @@ export function CoachCard({
   const persona = getCoachPersona(personaId);
   const coachPerspective: "White" | "Black" = coachColor === "black" ? "Black" : "White";
   const activeMode = explanation?.coachMode ?? storyline?.coachMode ?? "offline";
+  const formatProse = (text?: string | null) =>
+    text ? (plainEnglish ? formatCoachProse(text) : text) : "";
 
   const perspectiveBar = (
     <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5 border-b border-[#3d3b38]/70 pb-2 text-[10px]">
-      <div className="flex items-center gap-1">
-        <span className="font-semibold uppercase tracking-wide text-[#9e9c98]">Coach Side:</span>
-        {(["white", "black"] as const).map((side) => {
-          const active = coachColor === side;
-          return (
-            <button
-              key={side}
-              type="button"
-              onClick={() => onChangeCoachColor?.(side)}
-              aria-label={`Coach as ${side === "white" ? "White" : "Black"}`}
-              aria-pressed={active}
-              className={`rounded px-2 py-0.5 font-bold capitalize transition ${
-                active
-                  ? "bg-[#96bc4b] text-[#1a1917]"
-                  : "bg-[#262522] text-[#c9c7c3] hover:bg-[#312e2b] hover:text-white"
-              }`}
-            >
-              {side}
-            </button>
-          );
-        })}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1">
+          <span className="font-semibold uppercase tracking-wide text-[#9e9c98]">Coach Side:</span>
+          {(["white", "black"] as const).map((side) => {
+            const active = coachColor === side;
+            return (
+              <button
+                key={side}
+                type="button"
+                onClick={() => onChangeCoachColor?.(side)}
+                aria-label={`Coach as ${side === "white" ? "White" : "Black"}`}
+                aria-pressed={active}
+                className={`rounded px-1.5 py-0.5 font-bold capitalize transition ${
+                  active
+                    ? "bg-[#96bc4b] text-[#1a1917]"
+                    : "bg-[#262522] text-[#c9c7c3] hover:bg-[#312e2b] hover:text-white"
+                }`}
+              >
+                {side}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-1" role="group" aria-label="Coach notation format">
+          <span className="font-semibold uppercase tracking-wide text-[#9e9c98]">Notation:</span>
+          <button
+            type="button"
+            onClick={() => onChangePlainEnglish?.(true)}
+            aria-label="Plain English notation"
+            aria-pressed={plainEnglish}
+            title="Show readable plain English move names (e.g. knight takes b4)"
+            className={`rounded px-1.5 py-0.5 font-bold transition ${
+              plainEnglish
+                ? "bg-[#96bc4b] text-[#1a1917]"
+                : "bg-[#262522] text-[#c9c7c3] hover:bg-[#312e2b] hover:text-white"
+            }`}
+          >
+            Plain English
+          </button>
+          <button
+            type="button"
+            onClick={() => onChangePlainEnglish?.(false)}
+            aria-label="Simple notation (SAN)"
+            aria-pressed={!plainEnglish}
+            title="Show standard chess notation (e.g. Nxb4, g8+)"
+            className={`rounded px-1.5 py-0.5 font-bold transition ${
+              !plainEnglish
+                ? "bg-[#96bc4b] text-[#1a1917]"
+                : "bg-[#262522] text-[#c9c7c3] hover:bg-[#312e2b] hover:text-white"
+            }`}
+          >
+            SAN
+          </button>
+        </div>
       </div>
+
       <span
         className={`rounded px-1.5 py-0.5 font-semibold ${
           activeMode === "live"
@@ -134,16 +184,19 @@ export function CoachCard({
               </span>
             </div>
             <h3 className="mt-1 text-sm font-bold text-white">
-              {storyline?.headline || "Ready to review the game"}
+              {storyline?.headline
+                ? formatProse(storyline.headline)
+                : "Ready to review the game"}
             </h3>
             <p className="mt-1 text-xs leading-relaxed text-[#c9c7c3]">
-              {storyline?.summary ||
-                "Step forward through the moves or click Next Key Moment to inspect turning points, blunders, and brilliant sacrifices."}
+              {storyline?.summary
+                ? formatProse(storyline.summary)
+                : "Step forward through the moves or click Next Key Moment to inspect turning points, blunders, and brilliant sacrifices."}
             </p>
             {openingLabel && (
               <div className="mt-2 rounded bg-[#262522] px-2.5 py-1.5 text-[11px] text-[#c9c7c3]">
                 <span className="font-semibold text-[#a88a68]">{openingLabel}:</span>{" "}
-                {openingInsight}
+                {openingInsight ? formatProse(openingInsight) : ""}
               </div>
             )}
           </div>
@@ -155,7 +208,13 @@ export function CoachCard({
   const badgeColor = BADGE_METADATA[badge].color;
   const isOpponentMove = playedBy !== undefined && playedBy !== coachPerspective;
   const canRetry =
-    badge === "Blunder" || badge === "Mistake" || badge === "Miss" || badge === "Inaccuracy";
+    !isOpponentMove &&
+    (badge === "Blunder" || badge === "Mistake" || badge === "Miss" || badge === "Inaccuracy");
+  const canPunish =
+    isOpponentMove &&
+    canPunishError &&
+    Boolean(onPunishError) &&
+    (badge === "Blunder" || badge === "Mistake");
 
   return (
     <div className="rounded-md border border-[#3d3b38] bg-[#21201d] p-3">
@@ -172,7 +231,17 @@ export function CoachCard({
               <MoveBadgeIcon badge={badge} size="sm" />
               <span className="text-sm font-extrabold text-white">
                 {moveNumber}
-                {playedBy === "White" ? "." : "..."} {moveSan}
+                {playedBy === "White" ? "." : "..."}{" "}
+                {plainEnglish ? (
+                  <>
+                    <span>{sanToPlainEnglish(moveSan)}</span>{" "}
+                    <span className="font-mono text-xs font-semibold text-[#9e9c98]">
+                      ({moveSan})
+                    </span>
+                  </>
+                ) : (
+                  moveSan
+                )}
               </span>
               <span
                 className="rounded px-1.5 py-0.5 text-[11px] font-bold"
@@ -214,7 +283,7 @@ export function CoachCard({
                   ? "Not quite!"
                   : "Find the Best Move"}
               </div>
-              <div className="mt-0.5">{retryState.feedback}</div>
+              <div className="mt-0.5">{formatProse(retryState.feedback)}</div>
               <button
                 type="button"
                 onClick={onExitRetry}
@@ -228,15 +297,19 @@ export function CoachCard({
               <p className="mt-2 text-sm font-bold text-white">
                 {loadingExplanation
                   ? "Coach is examining the position..."
-                  : explanation?.shortComment || `${moveSan} is rated ${badge}.`}
+                  : explanation?.shortComment
+                  ? formatProse(explanation.shortComment)
+                  : `${formatNotationPair(moveSan, plainEnglish)} is rated ${badge}.`}
               </p>
               <p className="mt-1 text-xs leading-relaxed text-[#c9c7c3]">
-                {explanation?.detailedExplanation}
+                {formatProse(explanation?.detailedExplanation)}
               </p>
               {explanation?.bestMoveReasoning && (
                 <p className="mt-1.5 text-xs leading-relaxed text-[#9e9c98]">
-                  <span className="font-semibold text-[#96bc4b]">Best was {bestMoveSan}:</span>{" "}
-                  {explanation.bestMoveReasoning}
+                  <span className="font-semibold text-[#96bc4b]">
+                    Best was {bestMoveSan ? formatNotationPair(bestMoveSan, plainEnglish) : ""}:
+                  </span>{" "}
+                  {formatProse(explanation.bestMoveReasoning)}
                 </p>
               )}
             </>
@@ -272,13 +345,14 @@ export function CoachCard({
                 {bestMovePvSan.slice(0, 6).map((san, idx) => (
                   <span
                     key={`${san}-${idx}`}
+                    title={san}
                     className={`rounded px-1.5 py-0.5 ${
                       idx + 1 === bestMovePreviewIndex
                         ? "bg-[#96bc4b] font-bold text-[#1a1917]"
                         : "bg-[#312e2b] text-[#c9c7c3]"
                     }`}
                   >
-                    {san}
+                    {plainEnglish ? sanToPlainEnglish(san) : san}
                   </span>
                 ))}
               </div>
@@ -296,6 +370,16 @@ export function CoachCard({
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Retry Move
+                </button>
+              )}
+              {canPunish && (
+                <button
+                  type="button"
+                  onClick={onPunishError}
+                  className="inline-flex items-center gap-1.5 rounded bg-[#f5b041] px-3 py-1.5 text-xs font-bold text-[#1a1917] transition hover:bg-[#f7be63]"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Punish Error
                 </button>
               )}
               {bestMoveSan && (

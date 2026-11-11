@@ -207,6 +207,30 @@ describe("useReviewStore (Zustand reactive review state)", () => {
     expect(useReviewStore.getState().retryState.status).toBe("solved");
   });
 
+  it("supports startPunishMode on an opponent blunder from fenAfter targeting their refutation", () => {
+    const fixture = buildFixtureAnalysis();
+    // Inject refutationPvSan and ply 3 white mistake so Black can punish White's move 2. Qh5?
+    fixture.moves[2].classification.badge = "Mistake";
+    fixture.moves[2].refutationPvSan = ["Nc6", "Bc4", "g6"];
+    fixture.moves[3].bestMoveUci = "b8c6";
+    fixture.moves[3].bestMoveSan = "Nc6";
+
+    useReviewStore.getState().setAnalysis(fixture);
+    useReviewStore.getState().setCoachColor("black");
+    useReviewStore.getState().jumpToPly(3); // White played 2. Qh5
+
+    useReviewStore.getState().startPunishMode();
+    const punish = useReviewStore.getState().retryState;
+    expect(punish.active).toBe(true);
+    expect(punish.fen).toBe(fixture.moves[2].fenAfter); // Black's turn!
+    expect(punish.targetUci).toBe("b8c6");
+    expect(punish.targetSan).toBe("Nc6");
+
+    const res = useReviewStore.getState().submitRetryMove("b8", "c6");
+    expect(res.solved).toBe(true);
+    expect(useReviewStore.getState().retryState.status).toBe("solved");
+  });
+
   it("H3.3 & M4: supports underpromotion in Retry Mode and clears stale analysis on error", () => {
     const promoAnalysis = buildFixtureAnalysis();
     promoAnalysis.moves = [
@@ -330,9 +354,18 @@ describe("useReviewStore (Zustand reactive review state)", () => {
     store.stepBestMoveLine(-100);
     expect(useReviewStore.getState().bestMovePreviewIndex).toBe(0);
 
+    // Plain English coach notation defaults to true and toggles cleanly
+    expect(useReviewStore.getState().plainEnglishNotation).toBe(true);
+    store.togglePlainEnglishNotation();
+    expect(useReviewStore.getState().plainEnglishNotation).toBe(false);
+    store.setPlainEnglishNotation(true);
+    expect(useReviewStore.getState().plainEnglishNotation).toBe(true);
+    store.setPlainEnglishNotation(false);
+
     // Reset clears everything cleanly
     store.flipBoard();
     store.reset();
+    expect(useReviewStore.getState().plainEnglishNotation).toBe(true);
     expect(useReviewStore.getState().analysis).toBeNull();
     expect(useReviewStore.getState().pgnInput).toBe("");
     expect(useReviewStore.getState().analysisStatus).toBe("idle");

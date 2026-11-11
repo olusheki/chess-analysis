@@ -12,6 +12,9 @@ import {
   Sparkles,
   CheckCircle2,
   AlertTriangle,
+  Clock,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { analyzeGame } from "@/lib/analysis/game-analyzer";
 import { createBrowserStockfishEngine } from "@/lib/engine/stockfish-worker";
@@ -35,6 +38,27 @@ import { UsernameImporter } from "@/components/importer/UsernameImporter";
 
 type SidebarTab = "review" | "analysis" | "moves";
 type ImporterTab = "samples" | "chesscom" | "pgn";
+
+interface CustomPvPreview {
+  multipv: number;
+  cp: number;
+  mate?: number;
+  pvSan: string[];
+  fenStart: string;
+}
+
+function parseBaseClockFromHeader(timeControl?: string): string | undefined {
+  if (!timeControl) return undefined;
+  const baseStr = timeControl.split("+")[0]?.trim();
+  const baseSec = Number.parseInt(baseStr ?? "", 10);
+  if (!Number.isFinite(baseSec) || baseSec <= 0) return undefined;
+  const hrs = Math.floor(baseSec / 3600);
+  const mins = Math.floor((baseSec % 3600) / 60);
+  const secs = baseSec % 60;
+  const secStr = String(secs).padStart(2, "0");
+  if (hrs > 0) return `${hrs}:${String(mins).padStart(2, "0")}:${secStr}`;
+  return `${mins}:${secStr}`;
+}
 
 function normalizeInputToPgn(raw: string): string {
   const trimmed = raw.trim();
@@ -64,6 +88,7 @@ export default function GameReviewPage() {
     bestMovePreviewIndex,
     coachColor,
     personaId,
+    plainEnglishNotation,
     explanations,
     storyline,
     retryState,
@@ -73,6 +98,7 @@ export default function GameReviewPage() {
     setAnalysis,
     setCoachColor,
     setPersonaId,
+    setPlainEnglishNotation,
     setExplanation,
     setStoryline,
     jumpToPly,
@@ -85,6 +111,7 @@ export default function GameReviewPage() {
     toggleShowBestMove,
     stepBestMoveLine,
     startRetryMode,
+    startPunishMode,
     exitRetryMode,
     submitRetryMove,
   } = useReviewStore();
@@ -98,6 +125,13 @@ export default function GameReviewPage() {
   const [analysisRunId, setAnalysisRunId] = useState(0);
   const [failedExplainPlies, setFailedExplainPlies] = useState<Record<string, boolean>>({});
   const [customPgnDraft, setCustomPgnDraft] = useState(SAMPLE_GAMES[1].pgn);
+  const [previewCustomPv, setPreviewCustomPv] = useState<CustomPvPreview | null>(null);
+  const [customPvStep, setCustomPvStep] = useState(0);
+
+  useEffect(() => {
+    setPreviewCustomPv(null);
+    setCustomPvStep(0);
+  }, [currentPly, analysisRunId, sidebarTab]);
 
   const engineRef = useRef<ChessEngine | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -359,6 +393,40 @@ export default function GameReviewPage() {
       };
     }
 
+    if (sidebarTab === "analysis" && previewCustomPv) {
+      const c = new Chess(previewCustomPv.fenStart);
+      let lastPreviewMove: { from: Square; to: Square } | null = null;
+      const pvArrows: BoardArrow[] = [];
+      for (let i = 0; i < customPvStep && i < previewCustomPv.pvSan.length; i++) {
+        try {
+          const mv = c.move(previewCustomPv.pvSan[i]);
+          if (mv) lastPreviewMove = { from: mv.from, to: mv.to };
+        } catch {
+          break;
+        }
+      }
+      if (customPvStep === 0 && previewCustomPv.pvSan[0]) {
+        try {
+          const probe = new Chess(previewCustomPv.fenStart);
+          const first = probe.move(previewCustomPv.pvSan[0]);
+          if (first) {
+            pvArrows.push({ from: first.from, to: first.to, category: "best" });
+          }
+        } catch {
+          // Ignore invalid PV move
+        }
+      }
+      return {
+        fen: c.fen(),
+        lastMove: lastPreviewMove,
+        badge: null,
+        arrows: pvArrows,
+        whiteCp: previewCustomPv.cp,
+        whiteMate: previewCustomPv.mate,
+        evalLabel: formatEvalLabel(previewCustomPv.cp, previewCustomPv.mate),
+      };
+    }
+
     if (!activeMove) {
       return {
         fen: defaultFen,
@@ -383,14 +451,17 @@ export default function GameReviewPage() {
           break;
         }
       }
+      const bestLine = activeMove.pvLines?.[0];
+      const previewWhiteCp = bestLine ? bestLine.cp : activeMove.whiteCp;
+      const previewWhiteMate = bestLine ? bestLine.mate : activeMove.whiteMate;
       return {
         fen: c.fen(),
         lastMove: lastPreviewMove,
         badge: null,
         arrows: [] as BoardArrow[],
-        whiteCp: activeMove.whiteCp,
-        whiteMate: activeMove.whiteMate,
-        evalLabel: activeMove.evalLabel,
+        whiteCp: previewWhiteCp,
+        whiteMate: previewWhiteMate,
+        evalLabel: formatEvalLabel(previewWhiteCp, previewWhiteMate),
       };
     }
 
@@ -423,7 +494,17 @@ export default function GameReviewPage() {
       whiteMate: activeMove.whiteMate,
       evalLabel: activeMove.evalLabel,
     };
-  }, [activeMove, analysis?.startEval, analysis?.startFen, bestMovePreviewIndex, retryState, showBestMove]);
+  }, [
+    activeMove,
+    analysis?.startEval,
+    analysis?.startFen,
+    bestMovePreviewIndex,
+    customPvStep,
+    previewCustomPv,
+    retryState,
+    showBestMove,
+    sidebarTab,
+  ]);
 
   const whiteName = analysis?.headers.White || "White";
   const blackName = analysis?.headers.Black || "Black";
@@ -435,6 +516,23 @@ export default function GameReviewPage() {
     [boardView.fen, analysis?.startFen]
   );
 
+  const playerClocks = useMemo(() => {
+    if (!analysis) return { w: undefined, b: undefined };
+    const hasClocks = analysis.moves.some((m) => Boolean(m.clock));
+    if (!hasClocks) return { w: undefined, b: undefined };
+    const baseClock = parseBaseClockFromHeader(analysis.headers.TimeControl);
+    let w = baseClock;
+    let b = baseClock;
+    for (let i = 0; i < Math.min(currentPly, analysis.moves.length); i++) {
+      const m = analysis.moves[i];
+      if (m.clock) {
+        if (m.color === "w") w = m.clock;
+        else b = m.clock;
+      }
+    }
+    return { w, b };
+  }, [analysis, currentPly]);
+
   const renderCapturedStrip = (sideIsWhite: boolean) => {
     const pieces = sideIsWhite ? materialSummary.whiteCaptured : materialSummary.blackCaptured;
     const adv = sideIsWhite ? materialSummary.whiteAdvantage : materialSummary.blackAdvantage;
@@ -444,7 +542,11 @@ export default function GameReviewPage() {
         <div className="flex items-center -space-x-1">
           {pieces.slice(0, 8).map((p, idx) => (
             <span key={`${p.type}-${idx}`} className="h-3.5 w-3.5 inline-block">
-              <ChessPieceSvg color={p.color} type={p.type} />
+              <ChessPieceSvg
+                color={p.color}
+                type={p.type}
+                darkSurfaceContrast={p.color === "b"}
+              />
             </span>
           ))}
           {pieces.length > 8 && <span className="pl-1 text-[9px]">+{pieces.length - 8}</span>}
@@ -457,23 +559,23 @@ export default function GameReviewPage() {
   return (
     <div className="min-h-screen bg-[#312e2b] text-white">
       {/* Top Navbar */}
-      <header className="border-b border-[#3d3b38] bg-[#262522] px-4 py-2.5">
-        <div className="mx-auto flex max-w-[1320px] flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-[#96bc4b] font-black text-[#1a1917] shadow">
+      <header className="border-b border-[#3d3b38] bg-[#262522] px-3 py-2 sm:px-4 sm:py-2.5">
+        <div className="mx-auto flex max-w-[1320px] flex-wrap items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <div className="flex h-7 w-7 items-center justify-center rounded bg-[#96bc4b] font-black text-[#1a1917] shadow sm:h-8 sm:w-8">
               ♞
             </div>
             <div>
               <h1 className="text-sm font-extrabold tracking-tight text-white sm:text-base">
                 Chess.com Game Review <span className="text-[#96bc4b]">AI Coach</span>
               </h1>
-              <p className="text-[11px] text-[#9e9c98]">
+              <p className="hidden text-[11px] text-[#9e9c98] sm:block">
                 Stockfish 17.1 WASM • CAPS2 Accuracy • ECO Classifier • Grounded Gemini Coach
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             {/* Engine Depth */}
             <label className="flex items-center gap-1.5 rounded border border-[#3d3b38] bg-[#21201d] px-2.5 py-1.5 text-xs text-[#c9c7c3]">
               <Cpu className="h-3.5 w-3.5 text-[#96bc4b]" />
@@ -566,16 +668,40 @@ export default function GameReviewPage() {
                 )}
                 {renderCapturedStrip(boardFlipped)}
               </div>
-              {analysis && (
-                <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
-                  CAPS2:{" "}
-                  {(boardFlipped
-                    ? analysis.summary.white.accuracy
-                    : analysis.summary.black.accuracy
-                  ).toFixed(1)}
-                  %
-                </span>
-              )}
+              {(() => {
+                const topIsWhite = boardFlipped;
+                const topClock = topIsWhite ? playerClocks.w : playerClocks.b;
+                const topTurnActive =
+                  analysis &&
+                  (currentPly % 2 === 0 ? topIsWhite : !topIsWhite);
+                if (topClock) {
+                  return (
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 font-mono text-[11px] font-bold ${
+                        topTurnActive
+                          ? "bg-[#e2e0dc] text-[#1a1917]"
+                          : "bg-[#312e2b] text-[#c9c7c3]"
+                      }`}
+                    >
+                      <Clock className="h-3 w-3 opacity-75" />
+                      {topClock}
+                    </span>
+                  );
+                }
+                if (analysis && sidebarTab !== "review") {
+                  return (
+                    <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
+                      CAPS2:{" "}
+                      {(topIsWhite
+                        ? analysis.summary.white.accuracy
+                        : analysis.summary.black.accuracy
+                      ).toFixed(1)}
+                      %
+                    </span>
+                  );
+                }
+                return null;
+              })()}
             </div>
 
             {/* Eval Bar + Interactive 8x8 Board */}
@@ -624,16 +750,40 @@ export default function GameReviewPage() {
                 )}
                 {renderCapturedStrip(!boardFlipped)}
               </div>
-              {analysis && (
-                <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
-                  CAPS2:{" "}
-                  {(boardFlipped
-                    ? analysis.summary.black.accuracy
-                    : analysis.summary.white.accuracy
-                  ).toFixed(1)}
-                  %
-                </span>
-              )}
+              {(() => {
+                const bottomIsWhite = !boardFlipped;
+                const bottomClock = bottomIsWhite ? playerClocks.w : playerClocks.b;
+                const bottomTurnActive =
+                  analysis &&
+                  (currentPly % 2 === 0 ? bottomIsWhite : !bottomIsWhite);
+                if (bottomClock) {
+                  return (
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 font-mono text-[11px] font-bold ${
+                        bottomTurnActive
+                          ? "bg-[#e2e0dc] text-[#1a1917]"
+                          : "bg-[#312e2b] text-[#c9c7c3]"
+                      }`}
+                    >
+                      <Clock className="h-3 w-3 opacity-75" />
+                      {bottomClock}
+                    </span>
+                  );
+                }
+                if (analysis && sidebarTab !== "review") {
+                  return (
+                    <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
+                      CAPS2:{" "}
+                      {(bottomIsWhite
+                        ? analysis.summary.white.accuracy
+                        : analysis.summary.black.accuracy
+                      ).toFixed(1)}
+                      %
+                    </span>
+                  );
+                }
+                return null;
+              })()}
             </div>
           </div>
         </section>
@@ -716,6 +866,8 @@ export default function GameReviewPage() {
                       personaId={personaId}
                       coachColor={coachColor}
                       onChangeCoachColor={setCoachColor}
+                      plainEnglish={plainEnglishNotation}
+                      onChangePlainEnglish={setPlainEnglishNotation}
                       moveNumber={activeMove?.moveNumber}
                       playedBy={activeMove ? (activeMove.color === "w" ? "White" : "Black") : undefined}
                       moveSan={activeMove?.san}
@@ -737,7 +889,13 @@ export default function GameReviewPage() {
                       loadingExplanation={Boolean(
                         activeMove && explainKey && !explanations[activeMove.ply] && !failedExplainPlies[explainKey]
                       )}
+                      canPunishError={Boolean(
+                        activeMove &&
+                          (activeMove.ply < analysis.moves.length ||
+                            (activeMove.refutationPvSan?.length ?? 0) > 0)
+                      )}
                       onStartRetry={startRetryMode}
+                      onPunishError={startPunishMode}
                       onExitRetry={exitRetryMode}
                       onToggleBestMove={toggleShowBestMove}
                       onStepBestMove={stepBestMoveLine}
@@ -768,11 +926,16 @@ export default function GameReviewPage() {
                     </div>
                     {(() => {
                       const pvLines = activeMove?.pvLines ?? analysis.startEval?.pvLines ?? [];
+                      const fenStart = activeMove ? activeMove.fenBefore : analysis.startFen;
                       if (pvLines.length > 0) {
                         return (
                           <div className="mt-2 space-y-2 text-xs">
+                            <div className="text-[10px] text-[#9e9c98]">
+                              Click any line to preview on board ({previewCustomPv ? `Previewing PV${previewCustomPv.multipv}` : "top variations"})
+                            </div>
                             {pvLines.slice(0, 3).map((line, i) => {
                               const label = formatEvalLabel(line.cp, line.mate);
+                              const isSelected = previewCustomPv?.multipv === line.multipv;
                               const colorClass =
                                 i === 0
                                   ? "text-[#96bc4b]"
@@ -780,19 +943,96 @@ export default function GameReviewPage() {
                                   ? "text-[#5c8bb0]"
                                   : "text-[#a88a68]";
                               return (
-                                <div key={line.multipv} className="rounded bg-[#262522] p-2">
+                                <div
+                                  key={line.multipv}
+                                  className={`rounded border p-2 transition ${
+                                    isSelected
+                                      ? "border-[#96bc4b] bg-[#2a2926]"
+                                      : "border-transparent bg-[#262522] hover:border-[#3d3b38]"
+                                  }`}
+                                >
                                   <div className="flex items-center justify-between gap-2">
-                                    <span className={`font-bold ${colorClass}`}>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (isSelected) {
+                                          setPreviewCustomPv(null);
+                                          setCustomPvStep(0);
+                                        } else {
+                                          setPreviewCustomPv({
+                                            multipv: line.multipv,
+                                            cp: line.cp,
+                                            mate: line.mate,
+                                            pvSan: line.pvSan,
+                                            fenStart,
+                                          });
+                                          setCustomPvStep(Math.min(1, line.pvSan.length));
+                                        }
+                                      }}
+                                      className={`flex-1 text-left font-bold ${colorClass}`}
+                                    >
                                       PV{line.multipv}{" "}
                                       {i === 0 ? "(Best)" : i === 1 ? "(2nd)" : "(3rd)"}:{" "}
                                       {line.pvSan[0] || "—"}
-                                    </span>
-                                    <span className="rounded bg-[#312e2b] px-1.5 py-0.5 font-mono text-[11px] font-bold text-white">
-                                      {label}
-                                    </span>
+                                    </button>
+                                    <div className="flex items-center gap-1">
+                                      {isSelected && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            aria-label={`Step PV${line.multipv} back`}
+                                            disabled={customPvStep <= 0}
+                                            onClick={() => setCustomPvStep((s) => Math.max(0, s - 1))}
+                                            className="rounded bg-[#312e2b] p-0.5 text-white disabled:opacity-40"
+                                          >
+                                            <ChevronLeft className="h-3.5 w-3.5" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            aria-label={`Step PV${line.multipv} forward`}
+                                            disabled={
+                                              customPvStep >= Math.min(6, line.pvSan.length)
+                                            }
+                                            onClick={() =>
+                                              setCustomPvStep((s) =>
+                                                Math.min(Math.min(6, line.pvSan.length), s + 1)
+                                              )
+                                            }
+                                            className="rounded bg-[#312e2b] p-0.5 text-white disabled:opacity-40"
+                                          >
+                                            <ChevronRight className="h-3.5 w-3.5" />
+                                          </button>
+                                        </>
+                                      )}
+                                      <span className="rounded bg-[#312e2b] px-1.5 py-0.5 font-mono text-[11px] font-bold text-white">
+                                        {label}
+                                      </span>
+                                    </div>
                                   </div>
-                                  <div className="mt-1 font-mono text-[11px] text-[#c9c7c3]">
-                                    {line.pvSan.slice(0, 6).join(" ")}
+                                  <div className="mt-1 flex flex-wrap gap-1 font-mono text-[11px]">
+                                    {line.pvSan.slice(0, 6).map((san, idx) => (
+                                      <button
+                                        key={`${line.multipv}-${san}-${idx}`}
+                                        type="button"
+                                        onClick={() => {
+                                          setPreviewCustomPv({
+                                            multipv: line.multipv,
+                                            cp: line.cp,
+                                            mate: line.mate,
+                                            pvSan: line.pvSan,
+                                            fenStart,
+                                          });
+                                          setCustomPvStep(idx + 1);
+                                        }}
+                                        className={`rounded px-1 py-0.5 transition ${
+                                          isSelected && idx + 1 === customPvStep
+                                            ? "bg-[#96bc4b] font-bold text-[#1a1917]"
+                                            : "text-[#c9c7c3] hover:bg-[#312e2b]"
+                                        }`}
+                                      >
+                                        {san}
+                                      </button>
+                                    ))}
                                   </div>
                                 </div>
                               );

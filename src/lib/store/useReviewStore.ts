@@ -32,6 +32,7 @@ export interface ReviewStoreState {
   bestMovePreviewIndex: number; // 0..bestMovePvSan.length
   coachColor: "white" | "black";
   personaId: CoachPersonaId;
+  plainEnglishNotation: boolean;
   explanations: Record<number, CoachExplanationResponse>;
   storyline: GameStorylineResponse | null;
   retryState: RetryState;
@@ -42,6 +43,8 @@ export interface ReviewStoreState {
   setAnalysis: (analysis: GameAnalysis) => void;
   setCoachColor: (color: "white" | "black") => void;
   setPersonaId: (personaId: CoachPersonaId) => void;
+  setPlainEnglishNotation: (enabled: boolean) => void;
+  togglePlainEnglishNotation: () => void;
   setExplanation: (ply: number, explanation: CoachExplanationResponse) => void;
   setStoryline: (storyline: GameStorylineResponse) => void;
 
@@ -57,6 +60,7 @@ export interface ReviewStoreState {
   stepBestMoveLine: (delta: number) => void;
 
   startRetryMode: () => void;
+  startPunishMode: () => void;
   exitRetryMode: () => void;
   submitRetryMove: (from: string, to: string, promotion?: string) => { solved: boolean; san?: string };
   reset: () => void;
@@ -90,6 +94,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   bestMovePreviewIndex: 0,
   coachColor: "white",
   personaId: "danny",
+  plainEnglishNotation: true,
   explanations: {},
   storyline: null,
   retryState: INITIAL_RETRY_STATE,
@@ -126,6 +131,11 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   setCoachColor: (coachColor) => set({ coachColor, explanations: {}, storyline: null }),
 
   setPersonaId: (personaId) => set({ personaId, explanations: {}, storyline: null }),
+
+  setPlainEnglishNotation: (plainEnglishNotation) => set({ plainEnglishNotation }),
+
+  togglePlainEnglishNotation: () =>
+    set((state) => ({ plainEnglishNotation: !state.plainEnglishNotation })),
 
   setExplanation: (ply, explanation) =>
     set((state) => ({
@@ -224,6 +234,49 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
     });
   },
 
+  startPunishMode: () => {
+    const { analysis, currentPly } = get();
+    const move = getActiveMove(analysis, currentPly);
+    if (!analysis || !move) return;
+
+    // Punishment starts AFTER the opponent's error (`move.fenAfter`) for the player on move
+    const nextMove = analysis.moves[move.ply] ?? null;
+    let targetUci = nextMove?.bestMoveUci ?? "";
+    let targetSan = nextMove?.bestMoveSan ?? "";
+
+    if ((!targetUci || !targetSan) && move.refutationPvSan && move.refutationPvSan.length > 0) {
+      const sanCandidate = move.refutationPvSan[0];
+      try {
+        const probe = new Chess(move.fenAfter);
+        const resolved = probe.move(sanCandidate);
+        if (resolved) {
+          targetUci = `${resolved.from}${resolved.to}${resolved.promotion ?? ""}`;
+          targetSan = resolved.san;
+        }
+      } catch {
+        // Invalid refutation SAN in fixture
+      }
+    }
+
+    if (!targetUci || !targetSan) return;
+
+    const actor = move.color === "w" ? "White" : "Black";
+    set({
+      showBestMove: false,
+      bestMovePreviewIndex: 0,
+      retryState: {
+        active: true,
+        ply: move.ply,
+        fen: move.fenAfter,
+        targetUci,
+        targetSan,
+        status: "prompt",
+        feedback: `Punish ${actor}'s ${move.san} — find the best reply!`,
+        attempts: 0,
+      },
+    });
+  },
+
   exitRetryMode: () => set({ retryState: INITIAL_RETRY_STATE }),
 
   submitRetryMove: (from, to, promotion) => {
@@ -297,6 +350,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       showBestMove: false,
       bestMovePreviewIndex: 0,
       coachColor: "white",
+      plainEnglishNotation: true,
       explanations: {},
       storyline: null,
       retryState: INITIAL_RETRY_STATE,
