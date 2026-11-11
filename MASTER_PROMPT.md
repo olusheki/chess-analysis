@@ -7,7 +7,7 @@
 ```markdown
 You are a Principal Full-Stack Chess Software Architect and AI Engineer. Your objective is to build a complete, high-fidelity, 1:1 replica of Chess.com's signature "Game Review" and "AI Coach Analysis" system.
 
-The application must accurately recreate Chess.com’s visual styling, mathematical evaluation algorithms (CAPS2 accuracy, Win Probability), all 11 move rating badges (including Brilliant and Miss), opening classification, interactive board annotations (SVG arrows and square badge pills), dynamic eval bar, advantage timeline chart, and an AI Coach powered by a hybrid Stockfish 16 WASM + Gemini API explainability pipeline.
+The application must accurately recreate Chess.com’s visual styling, mathematical evaluation algorithms (CAPS2 accuracy, Win Probability), all 11 move rating badges (including Brilliant and Miss), opening classification, interactive board annotations (SVG arrows and square badge pills), dynamic eval bar, advantage timeline chart, an AI Coach powered by a hybrid Stockfish 16 WASM + Gemini API explainability pipeline, and **direct Chess.com username game import (fetching recent matches via Chess.com's public REST API)**.
 
 ---
 
@@ -24,6 +24,15 @@ The application must accurately recreate Chess.com’s visual styling, mathemati
 ---
 
 ### 2. CORE ARCHITECTURAL MODULES
+
+#### Module 0: Chess.com Username Game Fetcher & Importer
+- **Username Lookup**: Users can type any public Chess.com username (e.g. `hikaru`, `magnuscarlsen`, or their own account).
+- **Public REST API Integration**: Queries `https://api.chess.com/pub/player/{username}/games/archives` to fetch the player's profile avatar, country, and recent monthly archives without needing an API key.
+- **Game Selector Modal / Drawer**:
+  - Displays the last 15–20 completed games sorted chronologically.
+  - Shows Opponent username & rating, user color (White/Black), Time Control (Bullet, Blitz, Rapid, Daily), Game Result badge (Green Win, Red Loss, Gray Draw), and end date.
+  - Clicking any game immediately loads its PGN into the analysis engine pipeline.
+  - Fallback: Manual PGN text paste input or FEN string input for custom games.
 
 #### Module 1: The Hybrid Analysis Engine Pipeline
 Do NOT let the LLM calculate chess moves or evaluations. You must implement a three-tiered pipeline:
@@ -112,9 +121,13 @@ src/
 ├── app/
 │   ├── page.tsx                           // Main Game Review dashboard & PGN loader
 │   ├── api/
+│   │   ├── chesscom/route.ts              // Chess.com player profile & games proxy
 │   │   ├── explain/route.ts               // Gemini API proxy for move & game explanation
 │   │   └── openings/route.ts              // ECO opening lookup
 ├── components/
+│   ├── importer/
+│   │   ├── UsernameImporter.tsx           // Input bar to search Chess.com username
+│   │   └── GameSelectionList.tsx          // Interactive game list with win/loss badges
 │   ├── chess/
 │   │   ├── Chessboard.tsx                 // Interactive board with square highlights
 │   │   ├── BoardOverlays.tsx              // SVG Arrow rendering & square badge badges

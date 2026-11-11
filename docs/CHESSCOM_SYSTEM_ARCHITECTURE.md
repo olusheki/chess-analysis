@@ -13,7 +13,8 @@ Instead, the system employs a **Three-Tier Hybrid Engine Pipeline**:
 ```
  ┌─────────────────────────────────────────────────────────────┐
  │                         INPUT LAYER                         │
- │     PGN String / FEN Sequence / Move Timestamps / Player IDs │
+ │  • Chess.com Username Fetcher (REST API: /pub/player/games) │
+ │  • PGN String / FEN Sequence / Move Timestamps / Player IDs │
  └──────────────────────────────┬──────────────────────────────┘
                                 │
                                 ▼

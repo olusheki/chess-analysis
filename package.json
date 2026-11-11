@@ -1,0 +1,49 @@
+{
+  "name": "chess-analysis",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:mutate": "stryker run",
+    "test:mutate:smoke": "node scripts/mutation-smoke.mjs",
+    "verify": "npm run typecheck && npm run test && npm run test:mutate:smoke"
+  },
+  "dependencies": {
+    "@chess-openings/eco.json": "^2.2.2",
+    "@google/genai": "^1.4.0",
+    "chess.js": "^1.4.0",
+    "lucide-react": "^1.72.0",
+    "next": "^16.4.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "recharts": "^3.10.1",
+    "stockfish": "17.1.0",
+    "zustand": "^5.1.0"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "^10.1.1",
+    "@stryker-mutator/vitest-runner": "^10.1.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.5.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "^16.4.6",
+    "jsdom": "^26.1.0",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

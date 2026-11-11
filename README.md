@@ -17,6 +17,7 @@ A production-grade reverse-engineered specification, mathematical framework, ref
    - **[OPENING_CLASSIFIER_SPEC.md](./docs/OPENING_CLASSIFIER_SPEC.md)**: ECO code tree, opening variation recognition, and transposition handling.
 
 3. **Core TypeScript Reference Implementations (`src/lib/`)**:
+   - `src/lib/api/chesscom-api.ts`: Direct integration with Chess.com's public REST API to fetch player profiles, monthly archives, and recent games by username without an API key.
    - `src/lib/engine/win-probability.ts`: Sigmoid win probability conversion, CAPS2 move accuracy, weighted harmonic game accuracy, and Elo performance estimation.
    - `src/lib/analysis/move-classifier.ts`: 11-badge classification hierarchy with priority resolution (Brilliant sacrifices, Great sole winning moves, Misses, Blunders).
    - `src/lib/analysis/tactical-tagger.ts`: Deterministic board inspector detecting hanging pieces, forks, pins, skewers, checks, castling, and piece development.
