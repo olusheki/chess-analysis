@@ -1170,7 +1170,7 @@ describe("gemini-coach & explainability grounding", () => {
       bestMovePV: [],
       refutationPV: [],
       tacticalContext: makeContext({
-        hangingPieceDetails: { piece: "Queen", square: "d5" },
+        hangingPieceDetails: { piece: "Queen", square: "d5", value: 9 },
       }),
       coachInsights: {
         playedSan: "Qd5",
@@ -1305,7 +1305,10 @@ describe("gemini-coach & explainability grounding", () => {
       refutationPV: [],
       tacticalContext: makeContext({
         tags: ["TACTICAL_FORK"],
-        forkTargets: ["King on e1", "Rook on a1"],
+        forkTargets: [
+          { square: "e1", piece: "King" },
+          { square: "a1", piece: "Rook" },
+        ],
       }),
     });
     expect(oppGoodThreat.detailedExplanation).toContain("Threat check:");
@@ -1325,7 +1328,7 @@ describe("gemini-coach & explainability grounding", () => {
       bestMovePV: ["Nf3"],
       refutationPV: [],
       tacticalContext: makeContext({
-        hangingPieceDetails: { piece: "Queen", square: "a4" },
+        hangingPieceDetails: { piece: "Queen", square: "a4", value: 9 },
       }),
       coachInsights: {
         playedSan: "Qa4",
@@ -1417,7 +1420,7 @@ describe("gemini-coach & explainability grounding", () => {
       bestMovePV: ["O-O"],
       refutationPV: [],
       tacticalContext: makeContext({
-        hangingPieceDetails: { piece: "Knight", square: "b5" },
+        hangingPieceDetails: { piece: "Knight", square: "b5", value: 3 },
       }),
       coachInsights: {
         playedSan: "Nb5",
@@ -1498,7 +1501,10 @@ describe("gemini-coach & explainability grounding", () => {
         bestMovePV: ["Qh5"],
         tacticalContext: makeContext({
           tags: ["TACTICAL_FORK"],
-          forkTargets: ["King on e8", "Rook on h8"],
+          forkTargets: [
+            { square: "e8", piece: "King" },
+            { square: "h8", piece: "Rook" },
+          ],
         }),
         coachInsights: {
           playedSan: "Qh5",
