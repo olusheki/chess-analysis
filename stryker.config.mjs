@@ -14,6 +14,7 @@ const config = {
     "src/lib/engine/stockfish-worker.ts",
     "src/lib/analysis/move-classifier.ts",
     "src/lib/analysis/tactical-tagger.ts",
+    "src/lib/analysis/coach-insights.ts",
     "src/lib/analysis/opening-book.ts",
     "src/lib/analysis/sacrifice-detector.ts",
     "src/lib/analysis/game-analyzer.ts",
