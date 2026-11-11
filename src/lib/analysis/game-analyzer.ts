@@ -94,10 +94,152 @@ export interface GameAnalysis {
   };
 }
 
-function parseHeaderElo(raw?: string): number | undefined {
+/**
+ * Parses a positive numeric Elo rating from a PGN header value.
+ */
+export function parseHeaderElo(raw?: string): number | undefined {
   if (!raw) return undefined;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+export interface EvaluateSingleMoveInput {
+  move: ParsedMove;
+  evalBefore: PositionEval;
+  evalAfter: PositionEval;
+  isBook?: boolean;
+  prevMove?: ParsedMove;
+  prevDeltaWP?: number;
+}
+
+/**
+ * Evaluates, classifies, and extracts tactical/comparative coaching signals
+ * for a single played move given pre- and post-move engine evaluations.
+ */
+export function evaluateSingleAnalyzedMove(input: EvaluateSingleMoveInput): AnalyzedMove {
+  const { move, evalBefore, evalAfter, isBook = false, prevMove, prevDeltaWP } = input;
+  const chessBefore = new Chess(move.fenBefore);
+  const legalMoveCount = chessBefore.moves().length;
+
+  const isBestMove =
+    move.uci === evalBefore.bestMoveUci || move.san === evalBefore.bestMoveSan;
+
+  const bestLine = evalBefore.lines[0];
+  const secondLine = evalBefore.lines[1];
+
+  const bestActive = uciScoreToActiveCentipawns(
+    { cp: bestLine?.cp ?? evalBefore.whiteCp, mate: bestLine?.mate ?? evalBefore.whiteMate },
+    move.color
+  );
+
+  const pv2Active = secondLine
+    ? uciScoreToActiveCentipawns({ cp: secondLine.cp, mate: secondLine.mate }, move.color)
+    : undefined;
+
+  const playedActive = isBestMove
+    ? bestActive
+    : uciScoreToActiveCentipawns(
+        { cp: evalAfter.whiteCp, mate: evalAfter.whiteMate },
+        move.color
+      );
+
+  const materialSacrificed = isBook ? 0 : calculateMaterialSacrifice(move.fenBefore, move.san);
+  const isRecapture =
+    Boolean(prevMove) &&
+    prevMove!.san.includes("x") &&
+    move.san.includes("x") &&
+    prevMove!.to === move.to;
+  const movedPiece = chessBefore.get(move.from);
+  const capturedPiece = chessBefore.get(move.to);
+  const capturedVal = capturedPiece ? PIECE_VALUES[capturedPiece.type] : 0;
+  const replyGainOnDest =
+    capturedVal >= 1
+      ? staticExchangeOnSquare(
+          new Chess(move.fenAfter),
+          move.to,
+          move.color === "w" ? "b" : "w"
+        )
+      : 0;
+  const isBlunderedSquareCapture =
+    Boolean(prevMove) &&
+    prevMove!.to === move.to &&
+    (prevDeltaWP ?? 0) >= 15.0 &&
+    capturedVal >= (movedPiece ? PIECE_VALUES[movedPiece.type] : 0);
+  const isObviousFreeCapture =
+    isBlunderedSquareCapture ||
+    (capturedVal >= 5
+      ? capturedVal - replyGainOnDest >= 4
+      : capturedVal >= 3
+      ? replyGainOnDest === 0 && (prevDeltaWP ?? 0) >= 12.0
+      : capturedVal >= 1 && replyGainOnDest === 0 && (prevDeltaWP ?? 0) >= 25.0);
+  const isKingCheckEscape = chessBefore.inCheck() && movedPiece?.type === "k";
+
+  const classification = classifyMove({
+    ply: move.ply,
+    moveSan: move.san,
+    isBook,
+    legalMoveCount,
+    cpBest: bestActive.cp,
+    cpPlayed: playedActive.cp,
+    cpPV2: pv2Active?.cp,
+    mateBest: bestActive.mate,
+    matePlayed: playedActive.mate,
+    matePV2: pv2Active?.mate,
+    prevMoveOpponentDeltaWP: prevDeltaWP,
+    materialSacrificed,
+    isBestMove,
+    isRecapture,
+    isObviousFreeCapture,
+    isKingCheckEscape,
+  });
+
+  const refutationPvSan = evalAfter.lines[0]?.pvSan ?? [];
+  const tacticalContext = extractTacticalContext(
+    move.fenBefore,
+    move.fenAfter,
+    move.san,
+    move.moveNumber,
+    {
+      bestMoveSan: evalBefore.bestMoveSan,
+      refutationPvSan,
+      badge: classification.badge,
+    }
+  );
+
+  const coachInsights = analyzeComparativeReasons({
+    fenBefore: move.fenBefore,
+    fenAfter: move.fenAfter,
+    playedSan: move.san,
+    bestMoveSan: evalBefore.bestMoveSan,
+    bestMovePvSan: bestLine?.pvSan ?? [],
+    refutationPvSan,
+    moveNumber: move.moveNumber,
+    isBook,
+    playedTactics: tacticalContext,
+    classification: classification.badge,
+  });
+
+  return {
+    ...move,
+    whiteCp: evalAfter.whiteCp,
+    whiteMate: evalAfter.whiteMate,
+    evalLabel: formatEvalLabel(evalAfter.whiteCp, evalAfter.whiteMate, evalAfter.isCheckmate),
+    bestMoveUci: evalBefore.bestMoveUci,
+    bestMoveSan: evalBefore.bestMoveSan,
+    bestMovePvSan: bestLine?.pvSan ?? [],
+    altPvSan: secondLine?.pvSan ?? [],
+    refutationPvSan,
+    pvLines: evalBefore.lines.slice(0, 3).map((line) => ({
+      multipv: line.multipv,
+      cp: line.cp,
+      mate: line.mate,
+      pvSan: line.pvSan,
+    })),
+    materialSacrificed,
+    classification,
+    tacticalContext,
+    coachInsights,
+  };
 }
 
 export interface AnalyzeGameOptions {
@@ -290,136 +432,16 @@ export async function analyzeGame(
   let prevDeltaWP: number | undefined;
 
   for (let i = 0; i < moves.length; i++) {
-    const move = moves[i];
-    const evalBefore = evals[i];
-    const evalAfter = evals[i + 1];
-    const isBook = opening.plyIsBook[i] ?? false;
-
-    const chessBefore = new Chess(move.fenBefore);
-    const legalMoveCount = chessBefore.moves().length;
-
-    const isBestMove =
-      move.uci === evalBefore.bestMoveUci || move.san === evalBefore.bestMoveSan;
-
-    const bestLine = evalBefore.lines[0];
-    const secondLine = evalBefore.lines[1];
-
-    const bestActive = uciScoreToActiveCentipawns(
-      { cp: bestLine?.cp ?? evalBefore.whiteCp, mate: bestLine?.mate ?? evalBefore.whiteMate },
-      move.color
-    );
-
-    const pv2Active = secondLine
-      ? uciScoreToActiveCentipawns({ cp: secondLine.cp, mate: secondLine.mate }, move.color)
-      : undefined;
-
-    const playedActive = isBestMove
-      ? bestActive
-      : uciScoreToActiveCentipawns(
-          { cp: evalAfter.whiteCp, mate: evalAfter.whiteMate },
-          move.color
-        );
-
-    const materialSacrificed = isBook ? 0 : calculateMaterialSacrifice(move.fenBefore, move.san);
-    const prevMove = i > 0 ? moves[i - 1] : undefined;
-    const isRecapture =
-      Boolean(prevMove) &&
-      prevMove!.san.includes("x") &&
-      move.san.includes("x") &&
-      prevMove!.to === move.to;
-    const movedPiece = chessBefore.get(move.from);
-    const capturedPiece = chessBefore.get(move.to);
-    const capturedVal = capturedPiece ? PIECE_VALUES[capturedPiece.type] : 0;
-    const replyGainOnDest =
-      capturedVal >= 1
-        ? staticExchangeOnSquare(
-            new Chess(move.fenAfter),
-            move.to,
-            move.color === "w" ? "b" : "w"
-          )
-        : 0;
-    const isBlunderedSquareCapture =
-      Boolean(prevMove) &&
-      prevMove!.to === move.to &&
-      (prevDeltaWP ?? 0) >= 15.0 &&
-      capturedVal >= (movedPiece ? PIECE_VALUES[movedPiece.type] : 0);
-    const isObviousFreeCapture =
-      isBlunderedSquareCapture ||
-      (capturedVal >= 5
-        ? capturedVal - replyGainOnDest >= 4
-        : capturedVal >= 3
-        ? replyGainOnDest === 0 && (prevDeltaWP ?? 0) >= 12.0
-        : capturedVal >= 1 && replyGainOnDest === 0 && (prevDeltaWP ?? 0) >= 25.0);
-    const isKingCheckEscape = chessBefore.inCheck() && movedPiece?.type === "k";
-
-    const classification = classifyMove({
-      ply: move.ply,
-      moveSan: move.san,
-      isBook,
-      legalMoveCount,
-      cpBest: bestActive.cp,
-      cpPlayed: playedActive.cp,
-      cpPV2: pv2Active?.cp,
-      mateBest: bestActive.mate,
-      matePlayed: playedActive.mate,
-      matePV2: pv2Active?.mate,
-      prevMoveOpponentDeltaWP: prevDeltaWP,
-      materialSacrificed,
-      isBestMove,
-      isRecapture,
-      isObviousFreeCapture,
-      isKingCheckEscape,
+    const analyzed = evaluateSingleAnalyzedMove({
+      move: moves[i],
+      evalBefore: evals[i],
+      evalAfter: evals[i + 1],
+      isBook: opening.plyIsBook[i] ?? false,
+      prevMove: i > 0 ? moves[i - 1] : undefined,
+      prevDeltaWP,
     });
-
-    const refutationPvSan = evalAfter.lines[0]?.pvSan ?? [];
-    const tacticalContext = extractTacticalContext(
-      move.fenBefore,
-      move.fenAfter,
-      move.san,
-      move.moveNumber,
-      {
-        bestMoveSan: evalBefore.bestMoveSan,
-        refutationPvSan,
-        badge: classification.badge,
-      }
-    );
-
-    const coachInsights = analyzeComparativeReasons({
-      fenBefore: move.fenBefore,
-      fenAfter: move.fenAfter,
-      playedSan: move.san,
-      bestMoveSan: evalBefore.bestMoveSan,
-      bestMovePvSan: bestLine?.pvSan ?? [],
-      refutationPvSan,
-      moveNumber: move.moveNumber,
-      isBook,
-      playedTactics: tacticalContext,
-      classification: classification.badge,
-    });
-
-    prevDeltaWP = classification.deltaWP;
-
-    analyzedMoves.push({
-      ...move,
-      whiteCp: evalAfter.whiteCp,
-      whiteMate: evalAfter.whiteMate,
-      evalLabel: formatEvalLabel(evalAfter.whiteCp, evalAfter.whiteMate, evalAfter.isCheckmate),
-      bestMoveUci: evalBefore.bestMoveUci,
-      bestMoveSan: evalBefore.bestMoveSan,
-      bestMovePvSan: bestLine?.pvSan ?? [],
-      altPvSan: secondLine?.pvSan ?? [],
-      refutationPvSan,
-      pvLines: evalBefore.lines.slice(0, 3).map((line) => ({
-        multipv: line.multipv,
-        cp: line.cp,
-        mate: line.mate,
-        pvSan: line.pvSan,
-      })),
-      materialSacrificed,
-      classification,
-      tacticalContext,
-      coachInsights,
-    });
+    prevDeltaWP = analyzed.classification.deltaWP;
+    analyzedMoves.push(analyzed);
   }
 
   const whiteHeaderElo = parseHeaderElo(headers.WhiteElo);
