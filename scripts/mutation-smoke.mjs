@@ -173,10 +173,10 @@ const MUTANTS = [
     testFile: "tests/tactical-tagger.test.ts",
   },
   {
-    name: "M23: Reintroduce positive praise on Blunder/Miss in gemini-coach.ts",
-    file: "src/lib/ai/gemini-coach.ts",
-    target: "if (suppressOffensivePraise) {\n      return \"\";\n    }",
-    replacement: "if (false && suppressOffensivePraise) {\n      return \"\";\n    }",
+    name: "M23: Reintroduce positive praise on Blunder/Miss in offline-coach.ts",
+    file: "src/lib/ai/offline-coach.ts",
+    target: "if (suppressOffensivePraise) {\n    return \"\";\n  }",
+    replacement: "if (false && suppressOffensivePraise) {\n    return \"\";\n  }",
     testFile: "tests/gemini-coach.test.ts",
   },
   {
