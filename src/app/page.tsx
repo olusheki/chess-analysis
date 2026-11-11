@@ -15,15 +15,28 @@ import {
   Clock,
   ChevronLeft,
   ChevronRight,
+  Undo2,
+  Eye,
+  RefreshCw,
+  LogOut,
 } from "lucide-react";
 import {
   analyzeGame,
   getFenTurn,
   parseBaseClockFromHeader,
+  type ParsedMove,
 } from "@/lib/analysis/game-analyzer";
 import { createBrowserStockfishEngine } from "@/lib/engine/stockfish-worker";
-import type { ChessEngine } from "@/lib/engine/engine-evaluator";
+import {
+  buildStrengthUciConfig,
+  evaluateTerminalPosition,
+  type ChessEngine,
+} from "@/lib/engine/engine-evaluator";
 import { formatEvalLabel } from "@/lib/engine/uci-parser";
+import {
+  gradeUserPlayMove,
+  type PlayStartMode,
+} from "@/lib/play/play-session";
 import { computeCapturedMaterial } from "@/lib/chess/material";
 import { COACH_PERSONAS, CoachPersonaId } from "@/lib/ai/coach-personas";
 import {
@@ -44,6 +57,7 @@ import { CoachCard } from "@/components/review/CoachCard";
 import { MoveBadgeSummary } from "@/components/review/MoveBadgeSummary";
 import { MoveListReview } from "@/components/review/MoveListReview";
 import { NavigationBar } from "@/components/review/NavigationBar";
+import { PlayModePanel } from "@/components/review/PlayModePanel";
 import { UsernameImporter } from "@/components/importer/UsernameImporter";
 
 type SidebarTab = "review" | "analysis" | "moves";
@@ -91,6 +105,7 @@ export default function GameReviewPage() {
     explanations,
     storyline,
     retryState,
+    playMode,
     setPgnInput,
     setAnalyzing,
     setAnalysisError,
@@ -114,6 +129,18 @@ export default function GameReviewPage() {
     startPunishMode,
     exitRetryMode,
     submitRetryMove,
+    startPlayMode,
+    setPlayTargetElo,
+    togglePlayBestMove,
+    setPlayThinking,
+    setPlayEvaluatingMove,
+    recordPlayEngineEval,
+    applyUserPlayMove,
+    attachPlayMoveGrade,
+    applyEnginePlayMove,
+    undoPlayMove,
+    restartPlayMode,
+    exitPlayMode,
   } = useReviewStore();
 
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("review");
@@ -167,11 +194,27 @@ export default function GameReviewPage() {
 
   const engineRef = useRef<ChessEngine | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const playEngineRef = useRef<ChessEngine | null>(null);
+  const playActionTokenRef = useRef(0);
+
+  const getPlayEngine = useCallback(() => {
+    if (!playEngineRef.current) {
+      playEngineRef.current = createBrowserStockfishEngine();
+    }
+    return playEngineRef.current;
+  }, []);
+
+  const disposePlayEngine = useCallback(() => {
+    playActionTokenRef.current += 1;
+    playEngineRef.current?.dispose();
+    playEngineRef.current = null;
+  }, []);
 
   const runAnalysis = useCallback(
     async (pgn: string, autoFlipColor?: "white" | "black" | "preserve") => {
       abortRef.current?.abort();
       engineRef.current?.dispose();
+      disposePlayEngine();
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -221,7 +264,7 @@ export default function GameReviewPage() {
         }
       }
     },
-    [depth, flipBoard, setAnalysis, setAnalysisError, setAnalyzing, setCoachColor, setPgnInput]
+    [depth, disposePlayEngine, flipBoard, setAnalysis, setAnalysisError, setAnalyzing, setCoachColor, setPgnInput]
   );
 
   // Fetch / re-fetch grounded Game Storyline when analysis finishes, coachColor toggles, or persona changes
@@ -320,6 +363,7 @@ export default function GameReviewPage() {
       clearTimeout(timer);
       abortRef.current?.abort();
       engineRef.current?.dispose();
+      disposePlayEngine();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -329,16 +373,17 @@ export default function GameReviewPage() {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "ArrowLeft") {
+      const inPlayMode = useReviewStore.getState().playMode.active;
+      if (e.key === "ArrowLeft" && !inPlayMode) {
         e.preventDefault();
         prevMove();
-      } else if (e.key === "ArrowRight") {
+      } else if (e.key === "ArrowRight" && !inPlayMode) {
         e.preventDefault();
         nextMove();
-      } else if (e.key === "Home") {
+      } else if (e.key === "Home" && !inPlayMode) {
         e.preventDefault();
         goToStart();
-      } else if (e.key === "End") {
+      } else if (e.key === "End" && !inPlayMode) {
         e.preventDefault();
         goToEnd();
       } else if (e.key.toLowerCase() === "f") {
@@ -439,6 +484,57 @@ export default function GameReviewPage() {
     const defaultFen =
       analysis?.startFen ??
       "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+    if (playMode.active) {
+      const arrows: BoardArrow[] = [];
+      const latestMove =
+        playMode.moves.length > 0
+          ? playMode.moves[playMode.moves.length - 1]
+          : null;
+      const isLatestUserMove =
+        Boolean(latestMove) &&
+        latestMove!.by === "user" &&
+        Boolean(playMode.lastMove) &&
+        latestMove!.from === playMode.lastMove!.from &&
+        latestMove!.to === playMode.lastMove!.to;
+      const badge = isLatestUserMove ? latestMove?.grade?.badge ?? null : null;
+
+      if (
+        isLatestUserMove &&
+        badge &&
+        ["Inaccuracy", "Mistake", "Miss", "Blunder"].includes(badge)
+      ) {
+        arrows.push({
+          from: latestMove!.from,
+          to: latestMove!.to,
+          category: "blunder",
+        });
+      }
+
+      if (
+        playMode.showBestMove &&
+        !playMode.gameOver &&
+        !playMode.isThinking &&
+        playMode.currentEval?.bestMoveUci &&
+        playMode.currentEval.bestMoveUci.length >= 4
+      ) {
+        arrows.push({
+          from: playMode.currentEval.bestMoveUci.slice(0, 2) as Square,
+          to: playMode.currentEval.bestMoveUci.slice(2, 4) as Square,
+          category: "best",
+        });
+      }
+
+      return {
+        fen: playMode.fen,
+        lastMove: playMode.lastMove,
+        badge,
+        arrows,
+        whiteCp: playMode.evalWhiteCp,
+        whiteMate: playMode.evalWhiteMate,
+        evalLabel: formatEvalLabel(playMode.evalWhiteCp, playMode.evalWhiteMate),
+      };
+    }
 
     if (retryState.active && retryState.fen) {
       return {
@@ -560,9 +656,263 @@ export default function GameReviewPage() {
     analysis?.startFen,
     bestMovePreviewIndex,
     customPvStep,
+    playMode,
     retryState,
     showBestMove,
   ]);
+
+  const preEvaluatePlayTurn = useCallback(
+    async (fen: string, token: number) => {
+      if (token !== playActionTokenRef.current) return;
+      const live = useReviewStore.getState().playMode;
+      if (
+        !live.active ||
+        live.fen !== fen ||
+        live.gameOver ||
+        getFenTurn(fen) !== live.userColor
+      ) {
+        return;
+      }
+
+      const terminal = evaluateTerminalPosition(fen);
+      if (terminal) {
+        if (token === playActionTokenRef.current) {
+          recordPlayEngineEval(terminal);
+        }
+        return;
+      }
+
+      try {
+        const evalRes = await getPlayEngine().evaluatePosition(fen, 10, 3);
+        if (token !== playActionTokenRef.current) return;
+        recordPlayEngineEval(evalRes);
+      } catch {
+        // Worker disposed or interrupted cleanly on exit/undo
+      }
+    },
+    [getPlayEngine, recordPlayEngineEval]
+  );
+
+  const requestEnginePlayReply = useCallback(
+    async (fen: string, token: number) => {
+      if (token !== playActionTokenRef.current) return;
+      const liveBefore = useReviewStore.getState().playMode;
+      if (
+        !liveBefore.active ||
+        liveBefore.fen !== fen ||
+        liveBefore.gameOver ||
+        getFenTurn(fen) === liveBefore.userColor
+      ) {
+        setPlayThinking(false);
+        return;
+      }
+
+      setPlayThinking(true);
+      try {
+        // Brief pause so user move animation finishes cleanly before Stockfish responds
+        await new Promise((resolve) => setTimeout(resolve, 160));
+        if (token !== playActionTokenRef.current) return;
+
+        const liveState = useReviewStore.getState().playMode;
+        if (
+          !liveState.active ||
+          liveState.fen !== fen ||
+          liveState.gameOver ||
+          getFenTurn(fen) === liveState.userColor
+        ) {
+          return;
+        }
+
+        const cfg = buildStrengthUciConfig(liveState.targetElo);
+        const search = await getPlayEngine().evaluatePosition(
+          fen,
+          cfg.recommendedDepth,
+          1,
+          { limitElo: liveState.targetElo, moveTimeMs: 220 }
+        );
+        if (token !== playActionTokenRef.current) return;
+
+        if (!search.bestMoveUci) {
+          setPlayThinking(false);
+          return;
+        }
+
+        const applied = applyEnginePlayMove({ uci: search.bestMoveUci });
+        if (!applied.moved) {
+          setPlayThinking(false);
+          return;
+        }
+
+        const nextFen = useReviewStore.getState().playMode.fen;
+        if (!applied.isGameOver) {
+          await preEvaluatePlayTurn(nextFen, token);
+        } else {
+          const term = evaluateTerminalPosition(nextFen);
+          if (term && token === playActionTokenRef.current) {
+            recordPlayEngineEval(term);
+          }
+        }
+      } catch {
+        if (token === playActionTokenRef.current) {
+          setPlayThinking(false);
+        }
+      } finally {
+        if (token === playActionTokenRef.current) {
+          const post = useReviewStore.getState().playMode;
+          if (post.isThinking && (!post.active || post.gameOver || getFenTurn(post.fen) === post.userColor)) {
+            setPlayThinking(false);
+          }
+        }
+      }
+    },
+    [
+      applyEnginePlayMove,
+      getPlayEngine,
+      preEvaluatePlayTurn,
+      recordPlayEngineEval,
+      setPlayThinking,
+    ]
+  );
+
+  const kickOffPlayTurn = useCallback(
+    (token: number) => {
+      const live = useReviewStore.getState().playMode;
+      if (!live.active || live.gameOver) return;
+      if (getFenTurn(live.fen) !== live.userColor) {
+        void requestEnginePlayReply(live.fen, token);
+      } else {
+        void preEvaluatePlayTurn(live.fen, token);
+      }
+    },
+    [preEvaluatePlayTurn, requestEnginePlayReply]
+  );
+
+  const handleStartPlayMode = useCallback(
+    (mode: PlayStartMode = "board") => {
+      const token = ++playActionTokenRef.current;
+      const customFen = mode === "board" && activeCustomPv ? boardView.fen : null;
+      startPlayMode(mode, customFen);
+      setSidebarTab("review");
+      kickOffPlayTurn(token);
+    },
+    [activeCustomPv, boardView.fen, kickOffPlayTurn, startPlayMode]
+  );
+
+  const handleUndoPlayMove = useCallback(() => {
+    const token = ++playActionTokenRef.current;
+    undoPlayMove();
+    const live = useReviewStore.getState().playMode;
+    if (live.active && !live.currentEval && !live.gameOver && getFenTurn(live.fen) === live.userColor) {
+      void preEvaluatePlayTurn(live.fen, token);
+    }
+  }, [preEvaluatePlayTurn, undoPlayMove]);
+
+  const handleRestartPlayMode = useCallback(() => {
+    const token = ++playActionTokenRef.current;
+    restartPlayMode();
+    kickOffPlayTurn(token);
+  }, [kickOffPlayTurn, restartPlayMode]);
+
+  const handleExitPlayMode = useCallback(() => {
+    disposePlayEngine();
+    exitPlayMode();
+  }, [disposePlayEngine, exitPlayMode]);
+
+  const handlePlayBoardMove = useCallback(
+    async (from: string, to: string, promotion?: string) => {
+      const storeBefore = useReviewStore.getState();
+      const pmBefore = storeBefore.playMode;
+      if (!pmBefore.active || pmBefore.isThinking || pmBefore.gameOver) return;
+      if (getFenTurn(pmBefore.fen) !== pmBefore.userColor) return;
+
+      const prevRecord =
+        pmBefore.moves.length > 0
+          ? pmBefore.moves[pmBefore.moves.length - 1]
+          : undefined;
+      const evalBeforeCached = pmBefore.currentEval;
+
+      const token = ++playActionTokenRef.current;
+      const applied = applyUserPlayMove({
+        from: from as Square,
+        to: to as Square,
+        promotion,
+      });
+      if (!applied.moved || !applied.move || !applied.fenBefore || !applied.fenAfter) {
+        return;
+      }
+
+      try {
+        const evalBefore =
+          evalBeforeCached ??
+          (await getPlayEngine().evaluatePosition(applied.fenBefore, 10, 3));
+        if (token !== playActionTokenRef.current) return;
+
+        const evalAfter =
+          evaluateTerminalPosition(applied.fenAfter) ??
+          (await getPlayEngine().evaluatePosition(applied.fenAfter, 10, 1));
+        if (token !== playActionTokenRef.current) return;
+
+        const prevParsedMove: ParsedMove | undefined = prevRecord
+          ? {
+              ply: prevRecord.ply,
+              moveNumber: prevRecord.moveNumber,
+              color: prevRecord.color,
+              san: prevRecord.san,
+              uci: prevRecord.uci,
+              from: prevRecord.from,
+              to: prevRecord.to,
+              fenBefore: prevRecord.fenBefore,
+              fenAfter: prevRecord.fenAfter,
+            }
+          : undefined;
+
+        const liveState = useReviewStore.getState();
+        const curAnalysis = liveState.analysis;
+        const wName = curAnalysis?.headers.White || "White";
+        const bName = curAnalysis?.headers.Black || "Black";
+        const coachForSide: "White" | "Black" =
+          liveState.coachColor === "black" ? "Black" : "White";
+
+        const grade = gradeUserPlayMove({
+          fenBefore: applied.fenBefore,
+          fenAfter: applied.fenAfter,
+          san: applied.move.san,
+          uci: applied.move.uci,
+          from: applied.move.from,
+          to: applied.move.to,
+          ply: applied.move.ply,
+          evalBefore,
+          evalAfter,
+          prevMove: prevParsedMove,
+          prevDeltaWP: prevRecord?.grade?.deltaWP,
+          coachFor: coachForSide,
+          personaId: liveState.personaId,
+          openingName: curAnalysis?.opening.opening?.name,
+          playerName: coachForSide === "White" ? wName : bName,
+          opponentName: "Stockfish",
+        });
+
+        attachPlayMoveGrade(applied.move.id, grade);
+
+        if (!applied.isGameOver) {
+          await requestEnginePlayReply(applied.fenAfter, token);
+        }
+      } catch {
+        if (token === playActionTokenRef.current) {
+          setPlayEvaluatingMove(false);
+          setPlayThinking(false);
+        }
+      }
+    },
+    [
+      applyUserPlayMove,
+      attachPlayMoveGrade,
+      getPlayEngine,
+      requestEnginePlayReply,
+      setPlayEvaluatingMove,
+      setPlayThinking,
+    ]
+  );
 
   const whiteName = analysis?.headers.White || "White";
   const blackName = analysis?.headers.Black || "Black";
@@ -709,30 +1059,53 @@ export default function GameReviewPage() {
         <section className="flex flex-col items-center lg:sticky lg:top-4">
           <div className="w-full max-w-[640px]">
             {/* Top Player Plate */}
-            <div className="mb-2 flex items-center justify-between gap-2 rounded bg-[#262522] px-3 py-1.5 text-xs">
-              <div className="flex min-w-0 items-center gap-2">
-                <span
-                  className={`h-3 w-3 shrink-0 rounded-sm border border-[#524f4b] ${
-                    boardFlipped ? "bg-white" : "bg-[#191816]"
-                  }`}
-                />
-                <span className="truncate font-bold text-white">
-                  {boardFlipped ? whiteName : blackName}
-                </span>
-                {(boardFlipped ? whiteEloHeader : blackEloHeader) && (
-                  <span className="shrink-0 text-[#9e9c98]">
-                    ({boardFlipped ? whiteEloHeader : blackEloHeader})
-                  </span>
-                )}
-                {renderCapturedStrip(boardFlipped)}
-              </div>
-              {(() => {
-                const topIsWhite = boardFlipped;
-                const topClock = topIsWhite ? playerClocks.w : playerClocks.b;
-                const topTurnActive =
-                  analysis && getFenTurn(boardView.fen) === (topIsWhite ? "w" : "b");
-                if (topClock) {
-                  return (
+            {(() => {
+              const topIsWhite = boardFlipped;
+              const topColor: "w" | "b" = topIsWhite ? "w" : "b";
+              const topIsUser = playMode.active && playMode.userColor === topColor;
+              const topDisplayName = playMode.active
+                ? topIsUser
+                  ? `You (${topIsWhite ? whiteName : blackName})`
+                  : `Stockfish (~${playMode.targetElo})`
+                : topIsWhite
+                ? whiteName
+                : blackName;
+              const topDisplayElo = playMode.active
+                ? topIsUser
+                  ? String(playMode.matchedElo)
+                  : "BOT"
+                : topIsWhite
+                ? whiteEloHeader
+                : blackEloHeader;
+              const topClock = !playMode.active
+                ? topIsWhite
+                  ? playerClocks.w
+                  : playerClocks.b
+                : undefined;
+              const topTurnActive =
+                (playMode.active || analysis) && getFenTurn(boardView.fen) === topColor;
+
+              return (
+                <div className="mb-2 flex items-center justify-between gap-2 rounded bg-[#262522] px-3 py-1.5 text-xs">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={`h-3 w-3 shrink-0 rounded-sm border border-[#524f4b] ${
+                        topIsWhite ? "bg-white" : "bg-[#191816]"
+                      }`}
+                    />
+                    <span className="truncate font-bold text-white">{topDisplayName}</span>
+                    {topDisplayElo && (
+                      <span className="shrink-0 text-[#9e9c98]">({topDisplayElo})</span>
+                    )}
+                    {renderCapturedStrip(topIsWhite)}
+                  </div>
+                  {playMode.active ? (
+                    topTurnActive && !playMode.gameOver ? (
+                      <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#96bc4b]">
+                        {topIsUser ? "Your move" : "Thinking..."}
+                      </span>
+                    ) : null
+                  ) : topClock ? (
                     <span
                       className={`inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 font-mono text-[11px] font-bold ${
                         topTurnActive
@@ -743,10 +1116,7 @@ export default function GameReviewPage() {
                       <Clock className="h-3 w-3 opacity-75" />
                       {topClock}
                     </span>
-                  );
-                }
-                if (analysis && sidebarTab !== "review") {
-                  return (
+                  ) : analysis && sidebarTab !== "review" ? (
                     <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
                       CAPS2:{" "}
                       {(topIsWhite
@@ -755,11 +1125,10 @@ export default function GameReviewPage() {
                       ).toFixed(1)}
                       %
                     </span>
-                  );
-                }
-                return null;
-              })()}
-            </div>
+                  ) : null}
+                </div>
+              );
+            })()}
 
             {/* Eval Bar + Interactive 8x8 Board */}
             <div className="flex items-stretch gap-2.5">
@@ -778,11 +1147,19 @@ export default function GameReviewPage() {
                   badge={boardView.badge}
                   arrows={boardView.arrows}
                   flipped={boardFlipped}
-                  interactive={retryState.active}
+                  interactive={
+                    retryState.active ||
+                    (playMode.active &&
+                      !playMode.gameOver &&
+                      !playMode.isThinking &&
+                      getFenTurn(playMode.fen) === playMode.userColor)
+                  }
                   theme={boardTheme}
                   onMove={(from, to, promotion) => {
                     if (retryState.active) {
                       submitRetryMove(from, to, promotion);
+                    } else if (playMode.active) {
+                      void handlePlayBoardMove(from, to, promotion);
                     }
                   }}
                 />
@@ -790,30 +1167,53 @@ export default function GameReviewPage() {
             </div>
 
             {/* Bottom Player Plate */}
-            <div className="mt-2 flex items-center justify-between gap-2 rounded bg-[#262522] px-3 py-1.5 text-xs">
-              <div className="flex min-w-0 items-center gap-2">
-                <span
-                  className={`h-3 w-3 shrink-0 rounded-sm border border-[#524f4b] ${
-                    boardFlipped ? "bg-[#191816]" : "bg-white"
-                  }`}
-                />
-                <span className="truncate font-bold text-white">
-                  {boardFlipped ? blackName : whiteName}
-                </span>
-                {(boardFlipped ? blackEloHeader : whiteEloHeader) && (
-                  <span className="shrink-0 text-[#9e9c98]">
-                    ({boardFlipped ? blackEloHeader : whiteEloHeader})
-                  </span>
-                )}
-                {renderCapturedStrip(!boardFlipped)}
-              </div>
-              {(() => {
-                const bottomIsWhite = !boardFlipped;
-                const bottomClock = bottomIsWhite ? playerClocks.w : playerClocks.b;
-                const bottomTurnActive =
-                  analysis && getFenTurn(boardView.fen) === (bottomIsWhite ? "w" : "b");
-                if (bottomClock) {
-                  return (
+            {(() => {
+              const bottomIsWhite = !boardFlipped;
+              const bottomColor: "w" | "b" = bottomIsWhite ? "w" : "b";
+              const bottomIsUser = playMode.active && playMode.userColor === bottomColor;
+              const bottomDisplayName = playMode.active
+                ? bottomIsUser
+                  ? `You (${bottomIsWhite ? whiteName : blackName})`
+                  : `Stockfish (~${playMode.targetElo})`
+                : bottomIsWhite
+                ? whiteName
+                : blackName;
+              const bottomDisplayElo = playMode.active
+                ? bottomIsUser
+                  ? String(playMode.matchedElo)
+                  : "BOT"
+                : bottomIsWhite
+                ? whiteEloHeader
+                : blackEloHeader;
+              const bottomClock = !playMode.active
+                ? bottomIsWhite
+                  ? playerClocks.w
+                  : playerClocks.b
+                : undefined;
+              const bottomTurnActive =
+                (playMode.active || analysis) && getFenTurn(boardView.fen) === bottomColor;
+
+              return (
+                <div className="mt-2 flex items-center justify-between gap-2 rounded bg-[#262522] px-3 py-1.5 text-xs">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={`h-3 w-3 shrink-0 rounded-sm border border-[#524f4b] ${
+                        bottomIsWhite ? "bg-white" : "bg-[#191816]"
+                      }`}
+                    />
+                    <span className="truncate font-bold text-white">{bottomDisplayName}</span>
+                    {bottomDisplayElo && (
+                      <span className="shrink-0 text-[#9e9c98]">({bottomDisplayElo})</span>
+                    )}
+                    {renderCapturedStrip(bottomIsWhite)}
+                  </div>
+                  {playMode.active ? (
+                    bottomTurnActive && !playMode.gameOver ? (
+                      <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#96bc4b]">
+                        {bottomIsUser ? "Your move" : "Thinking..."}
+                      </span>
+                    ) : null
+                  ) : bottomClock ? (
                     <span
                       className={`inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 font-mono text-[11px] font-bold ${
                         bottomTurnActive
@@ -824,10 +1224,7 @@ export default function GameReviewPage() {
                       <Clock className="h-3 w-3 opacity-75" />
                       {bottomClock}
                     </span>
-                  );
-                }
-                if (analysis && sidebarTab !== "review") {
-                  return (
+                  ) : analysis && sidebarTab !== "review" ? (
                     <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
                       CAPS2:{" "}
                       {(bottomIsWhite
@@ -836,25 +1233,78 @@ export default function GameReviewPage() {
                       ).toFixed(1)}
                       %
                     </span>
-                  );
-                }
-                return null;
-              })()}
-            </div>
+                  ) : null}
+                </div>
+              );
+            })()}
 
-            {analysis && (
+            {(analysis || playMode.active) && (
               <div className="mt-2.5 rounded-lg border border-[#3d3b38] bg-[#262522] p-2.5 shadow-xl">
-                <NavigationBar
-                  currentPly={currentPly}
-                  totalPlies={analysis.moves.length}
-                  hasKeyMoments={hasKeyMoments}
-                  onStart={goToStart}
-                  onPrev={prevMove}
-                  onNextKeyMoment={nextKeyMoment}
-                  onNext={nextMove}
-                  onEnd={goToEnd}
-                  onFlip={flipBoard}
-                />
+                {playMode.active ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#3d3b38] bg-[#21201d] p-2">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleUndoPlayMove}
+                        disabled={playMode.undoStack.length === 0}
+                        className="inline-flex items-center gap-1.5 rounded bg-[#262522] px-2.5 py-1.5 text-xs font-bold text-white transition hover:bg-[#312e2b] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Undo2 className="h-3.5 w-3.5" />
+                        <span>Undo</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={togglePlayBestMove}
+                        disabled={
+                          Boolean(playMode.gameOver) ||
+                          playMode.isThinking ||
+                          !playMode.currentEval?.bestMoveSan
+                        }
+                        className={`inline-flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                          playMode.showBestMove
+                            ? "border-[#96bc4b] bg-[#96bc4b]/15 text-[#96bc4b]"
+                            : "border-[#3d3b38] bg-[#262522] text-white hover:bg-[#312e2b]"
+                        }`}
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        <span>Best Move</span>
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={flipBoard}
+                        aria-label="Flip board"
+                        title="Flip board (F)"
+                        className="rounded border border-[#3d3b38] bg-[#262522] p-1.5 text-[#c9c7c3] transition hover:bg-[#312e2b] hover:text-white"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleExitPlayMode}
+                        className="inline-flex items-center gap-1.5 rounded border border-[#3d3b38] bg-[#262522] px-2.5 py-1.5 text-xs font-semibold text-[#c9c7c3] transition hover:bg-[#312e2b] hover:text-white"
+                      >
+                        <LogOut className="h-3.5 w-3.5" />
+                        <span>Exit Play</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : analysis ? (
+                  <NavigationBar
+                    currentPly={currentPly}
+                    totalPlies={analysis.moves.length}
+                    hasKeyMoments={hasKeyMoments}
+                    onStart={goToStart}
+                    onPrev={prevMove}
+                    onNextKeyMoment={nextKeyMoment}
+                    onNext={nextMove}
+                    onEnd={goToEnd}
+                    onFlip={flipBoard}
+                    onPlayFromHere={() => handleStartPlayMode("board")}
+                    playModeActive={playMode.active}
+                  />
+                ) : null}
               </div>
             )}
           </div>
@@ -893,89 +1343,106 @@ export default function GameReviewPage() {
             </div>
           )}
 
-          {/* Sidebar Tab Header */}
-          <div className="grid grid-cols-3 rounded-md bg-[#21201d] p-1 text-xs font-bold">
-            {(
-              [
-                { id: "review", label: "Review" },
-                { id: "analysis", label: "Analysis" },
-                { id: "moves", label: "Moves" },
-              ] as const
-            ).map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setSidebarTab(t.id)}
-                className={`rounded py-1.5 transition ${
-                  sidebarTab === t.id
-                    ? "bg-[#312e2b] text-white shadow"
-                    : "text-[#9e9c98] hover:text-white"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+          {/* Sidebar Workspace: Play Mode OR Game Review Tabs */}
+          {playMode.active ? (
+            <PlayModePanel
+              playMode={playMode}
+              personaId={personaId}
+              plainEnglish={plainEnglishNotation}
+              onChangePersona={setPersonaId}
+              onChangePlainEnglish={setPlainEnglishNotation}
+              onSetTargetElo={setPlayTargetElo}
+              onUndo={handleUndoPlayMove}
+              onToggleBestMove={togglePlayBestMove}
+              onRestart={handleRestartPlayMode}
+              onExit={handleExitPlayMode}
+            />
+          ) : (
+            <>
+              {/* Sidebar Tab Header */}
+              <div className="grid grid-cols-3 rounded-md bg-[#21201d] p-1 text-xs font-bold">
+                {(
+                  [
+                    { id: "review", label: "Review" },
+                    { id: "analysis", label: "Analysis" },
+                    { id: "moves", label: "Moves" },
+                  ] as const
+                ).map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setSidebarTab(t.id)}
+                    className={`rounded py-1.5 transition ${
+                      sidebarTab === t.id
+                        ? "bg-[#312e2b] text-white shadow"
+                        : "text-[#9e9c98] hover:text-white"
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
 
-          {analysis && (
-            <div className="min-h-0 flex-1 space-y-3">
-              {sidebarTab === "review" && (
-                <div className="flex flex-col gap-3">
-                  <div className="order-2 lg:order-1">
-                    <AccuracyHeader
-                      whiteName={whiteName}
-                      blackName={blackName}
-                      whiteEloHeader={whiteEloHeader}
-                      blackEloHeader={blackEloHeader}
-                      summary={analysis.summary}
-                      coachColor={coachColor}
-                      onSelectCoachColor={setCoachColor}
-                    />
-                  </div>
+              {analysis && (
+                <div className="min-h-0 flex-1 space-y-3">
+                  {sidebarTab === "review" && (
+                    <div className="flex flex-col gap-3">
+                      <div className="order-2 lg:order-1">
+                        <AccuracyHeader
+                          whiteName={whiteName}
+                          blackName={blackName}
+                          whiteEloHeader={whiteEloHeader}
+                          blackEloHeader={blackEloHeader}
+                          summary={analysis.summary}
+                          coachColor={coachColor}
+                          onSelectCoachColor={setCoachColor}
+                        />
+                      </div>
 
-                  <div className="order-1 lg:order-2">
-                    <CoachCard
-                      personaId={personaId}
-                      onChangePersona={setPersonaId}
-                      geminiApiKey={geminiApiKey}
-                      onChangeGeminiApiKey={handleChangeGeminiApiKey}
-                      coachColor={coachColor}
-                      onChangeCoachColor={setCoachColor}
-                      plainEnglish={plainEnglishNotation}
-                      onChangePlainEnglish={setPlainEnglishNotation}
-                      moveNumber={activeMove?.moveNumber}
-                      playedBy={activeMove ? (activeMove.color === "w" ? "White" : "Black") : undefined}
-                      moveSan={activeMove?.san}
-                      badge={activeMove?.classification.badge}
-                      evalLabel={activeMove?.evalLabel}
-                      bestMoveSan={activeMove?.bestMoveSan}
-                      bestMovePvSan={activeMove?.bestMovePvSan}
-                      explanation={activeMove ? explanations[activeMove.ply] : null}
-                      storyline={storyline}
-                      openingLabel={
-                        analysis.opening.opening
-                          ? `[${analysis.opening.opening.eco}] ${analysis.opening.opening.name}`
-                          : undefined
-                      }
-                      openingInsight={analysis.opening.insight}
-                      retryState={retryState}
-                      showBestMove={showBestMove}
-                      bestMovePreviewIndex={bestMovePreviewIndex}
-                      loadingExplanation={Boolean(
-                        activeMove && explainKey && !explanations[activeMove.ply] && !failedExplainPlies[explainKey]
-                      )}
-                      canPunishError={Boolean(
-                        activeMove &&
-                          (activeMove.ply < analysis.moves.length ||
-                            (activeMove.refutationPvSan?.length ?? 0) > 0)
-                      )}
-                      onStartRetry={startRetryMode}
-                      onPunishError={startPunishMode}
-                      onExitRetry={exitRetryMode}
-                      onToggleBestMove={toggleShowBestMove}
-                      onStepBestMove={stepBestMoveLine}
-                    />
-                  </div>
+                      <div className="order-1 lg:order-2">
+                        <CoachCard
+                          personaId={personaId}
+                          onChangePersona={setPersonaId}
+                          geminiApiKey={geminiApiKey}
+                          onChangeGeminiApiKey={handleChangeGeminiApiKey}
+                          coachColor={coachColor}
+                          onChangeCoachColor={setCoachColor}
+                          plainEnglish={plainEnglishNotation}
+                          onChangePlainEnglish={setPlainEnglishNotation}
+                          moveNumber={activeMove?.moveNumber}
+                          playedBy={activeMove ? (activeMove.color === "w" ? "White" : "Black") : undefined}
+                          moveSan={activeMove?.san}
+                          badge={activeMove?.classification.badge}
+                          evalLabel={activeMove?.evalLabel}
+                          bestMoveSan={activeMove?.bestMoveSan}
+                          bestMovePvSan={activeMove?.bestMovePvSan}
+                          explanation={activeMove ? explanations[activeMove.ply] : null}
+                          storyline={storyline}
+                          openingLabel={
+                            analysis.opening.opening
+                              ? `[${analysis.opening.opening.eco}] ${analysis.opening.opening.name}`
+                              : undefined
+                          }
+                          openingInsight={analysis.opening.insight}
+                          retryState={retryState}
+                          showBestMove={showBestMove}
+                          bestMovePreviewIndex={bestMovePreviewIndex}
+                          loadingExplanation={Boolean(
+                            activeMove && explainKey && !explanations[activeMove.ply] && !failedExplainPlies[explainKey]
+                          )}
+                          canPunishError={Boolean(
+                            activeMove &&
+                              (activeMove.ply < analysis.moves.length ||
+                                (activeMove.refutationPvSan?.length ?? 0) > 0)
+                          )}
+                          onStartRetry={startRetryMode}
+                          onPunishError={startPunishMode}
+                          onFixAndPlayOut={() => handleStartPlayMode("before-move")}
+                          onExitRetry={exitRetryMode}
+                          onToggleBestMove={toggleShowBestMove}
+                          onStepBestMove={stepBestMoveLine}
+                        />
+                      </div>
 
                   <div className="order-3">
                     <EvalGraph
@@ -1196,6 +1663,8 @@ export default function GameReviewPage() {
                 />
               )}
             </div>
+          )}
+            </>
           )}
         </aside>
       </main>

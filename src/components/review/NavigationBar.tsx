@@ -8,6 +8,7 @@ import {
   ChevronsRight,
   Sparkles,
   RefreshCw,
+  Swords,
 } from "lucide-react";
 
 interface NavigationBarProps {
@@ -20,6 +21,8 @@ interface NavigationBarProps {
   onNext: () => void;
   onEnd: () => void;
   onFlip: () => void;
+  onPlayFromHere?: () => void;
+  playModeActive?: boolean;
 }
 
 export function NavigationBar({
@@ -32,9 +35,11 @@ export function NavigationBar({
   onNext,
   onEnd,
   onFlip,
+  onPlayFromHere,
+  playModeActive = false,
 }: NavigationBarProps) {
   return (
-    <div className="flex items-center gap-1.5 rounded-md border border-[#3d3b38] bg-[#21201d] p-2">
+    <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-[#3d3b38] bg-[#21201d] p-2 sm:flex-nowrap">
       <button
         type="button"
         onClick={onStart}
@@ -99,6 +104,23 @@ export function NavigationBar({
       >
         <RefreshCw className="h-4 w-4" />
       </button>
+
+      {onPlayFromHere && (
+        <button
+          type="button"
+          onClick={onPlayFromHere}
+          aria-pressed={playModeActive}
+          title="Play from this board position against Stockfish"
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded border px-2.5 py-2 text-xs font-bold transition ${
+            playModeActive
+              ? "border-[#96bc4b] bg-[#96bc4b] text-[#1a1917]"
+              : "border-[#3d3b38] bg-[#262522] text-[#96bc4b] hover:border-[#96bc4b]/60 hover:bg-[#312e2b]"
+          }`}
+        >
+          <Swords className="h-3.5 w-3.5" />
+          <span>{playModeActive ? "Playing" : "Play Here"}</span>
+        </button>
+      )}
     </div>
   );
 }

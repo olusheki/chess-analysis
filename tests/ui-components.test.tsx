@@ -1148,5 +1148,62 @@ describe("UI components & visual geometry", () => {
       expect(screen.getByRole("button", { name: /play again/i })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /back to review/i })).toBeInTheDocument();
     });
+
+    it("renders 'Play Here' button in NavigationBar and 'Fix & Play Out' button in CoachCard for coached-side errors", () => {
+      const onPlayFromHere = vi.fn();
+      render(
+        <NavigationBar
+          currentPly={3}
+          totalPlies={10}
+          hasKeyMoments={true}
+          onStart={vi.fn()}
+          onPrev={vi.fn()}
+          onNextKeyMoment={vi.fn()}
+          onNext={vi.fn()}
+          onEnd={vi.fn()}
+          onFlip={vi.fn()}
+          onPlayFromHere={onPlayFromHere}
+        />
+      );
+
+      const playHereBtn = screen.getByRole("button", { name: /play here/i });
+      fireEvent.click(playHereBtn);
+      expect(onPlayFromHere).toHaveBeenCalledTimes(1);
+
+      const onFixAndPlayOut = vi.fn();
+      render(
+        <CoachCard
+          personaId="danny"
+          coachColor="white"
+          moveNumber={3}
+          playedBy="White"
+          moveSan="Qh5"
+          badge="Blunder"
+          bestMoveSan="Nf3"
+          bestMovePvSan={["Nf3", "Nc6"]}
+          retryState={{
+            active: false,
+            ply: null,
+            fen: null,
+            targetUci: null,
+            targetSan: null,
+            status: "idle",
+            feedback: null,
+            attempts: 0,
+          }}
+          showBestMove={false}
+          bestMovePreviewIndex={0}
+          onStartRetry={vi.fn()}
+          onFixAndPlayOut={onFixAndPlayOut}
+          onExitRetry={vi.fn()}
+          onToggleBestMove={vi.fn()}
+          onStepBestMove={vi.fn()}
+        />
+      );
+
+      const fixPlayBtn = screen.getByRole("button", { name: /fix & play out/i });
+      fireEvent.click(fixPlayBtn);
+      expect(onFixAndPlayOut).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -9,6 +9,7 @@ import {
   Sparkles,
   Lightbulb,
   KeyRound,
+  Swords,
 } from "lucide-react";
 import { BADGE_METADATA, MoveBadge } from "@/lib/analysis/move-classifier";
 import type { CoachExplanationResponse, GameStorylineResponse } from "@/lib/ai/gemini-coach";
@@ -49,6 +50,8 @@ interface CoachCardProps {
   canPunishError?: boolean;
   onStartRetry: () => void;
   onPunishError?: () => void;
+  onFixAndPlayOut?: () => void;
+  onPlayFromHere?: () => void;
   onExitRetry: () => void;
   onToggleBestMove: () => void;
   onStepBestMove: (delta: number) => void;
@@ -81,6 +84,8 @@ export function CoachCard({
   canPunishError = false,
   onStartRetry,
   onPunishError,
+  onFixAndPlayOut,
+  onPlayFromHere,
   onExitRetry,
   onToggleBestMove,
   onStepBestMove,
@@ -523,6 +528,16 @@ export function CoachCard({
                   Retry Move
                 </button>
               )}
+              {canRetry && onFixAndPlayOut && (
+                <button
+                  type="button"
+                  onClick={onFixAndPlayOut}
+                  className="inline-flex items-center gap-1.5 rounded border border-[#96bc4b]/60 bg-[#96bc4b]/15 px-3 py-1.5 text-xs font-bold text-[#96bc4b] transition hover:bg-[#96bc4b]/25"
+                >
+                  <Swords className="h-3.5 w-3.5" />
+                  Fix & Play Out
+                </button>
+              )}
               {canPunish && (
                 <button
                   type="button"
@@ -531,6 +546,16 @@ export function CoachCard({
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Punish Error
+                </button>
+              )}
+              {!canRetry && onPlayFromHere && (
+                <button
+                  type="button"
+                  onClick={onPlayFromHere}
+                  className="inline-flex items-center gap-1.5 rounded border border-[#3d3b38] bg-[#262522] px-3 py-1.5 text-xs font-semibold text-[#96bc4b] transition hover:bg-[#312e2b]"
+                >
+                  <Swords className="h-3.5 w-3.5" />
+                  Play Here
                 </button>
               )}
               {bestMoveSan && (
