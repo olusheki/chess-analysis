@@ -1,11 +1,23 @@
 import { create } from "zustand";
-import { Chess } from "chess.js";
-import type { AnalyzedMove, GameAnalysis } from "@/lib/analysis/game-analyzer";
+import { Chess, type Square } from "chess.js";
+import { getFenTurn, type AnalyzedMove, type GameAnalysis } from "@/lib/analysis/game-analyzer";
 import type {
   CoachExplanationResponse,
   GameStorylineResponse,
 } from "@/lib/ai/gemini-coach";
 import type { CoachPersonaId } from "@/lib/ai/coach-personas";
+import type { PositionEval } from "@/lib/engine/engine-evaluator";
+import {
+  DEFAULT_CHESS_START_FEN,
+  PLAY_DEFAULT_FALLBACK_ELO,
+  clampPlayElo,
+  getPlayGameOverStatus,
+  resolveMatchedElo,
+  resolvePlayAnchor,
+  type PlayGameOverStatus,
+  type PlayGradedMove,
+  type PlayStartMode,
+} from "@/lib/play/play-session";
 
 export type AnalysisStatus = "idle" | "analyzing" | "complete" | "error";
 
@@ -18,6 +30,58 @@ export interface RetryState {
   status: "idle" | "prompt" | "incorrect" | "solved";
   feedback: string | null;
   attempts: number;
+}
+
+export interface PlayMoveRecord {
+  id: string;
+  ply: number;
+  moveNumber: number;
+  color: "w" | "b";
+  san: string;
+  uci: string;
+  from: Square;
+  to: Square;
+  fenBefore: string;
+  fenAfter: string;
+  by: "user" | "engine";
+  grade?: PlayGradedMove;
+  evalAfterWhiteCp?: number;
+  evalAfterWhiteMate?: number;
+  evalLabel?: string;
+}
+
+export interface PlayUndoSnapshot {
+  fen: string;
+  moves: PlayMoveRecord[];
+  lastMove: { from: Square; to: Square } | null;
+  currentEval: PositionEval | null;
+  evalWhiteCp: number;
+  evalWhiteMate?: number;
+}
+
+export interface PlayModeState {
+  active: boolean;
+  startMode: PlayStartMode;
+  anchorFen: string;
+  anchorPly: number;
+  anchorDescription: string;
+  anchorWhiteCp: number;
+  anchorWhiteMate?: number;
+  userColor: "w" | "b";
+  targetElo: number;
+  matchedElo: number;
+  matchedEloSource: "pgn" | "estimated" | "default";
+  fen: string;
+  moves: PlayMoveRecord[];
+  undoStack: PlayUndoSnapshot[];
+  lastMove: { from: Square; to: Square } | null;
+  currentEval: PositionEval | null;
+  evalWhiteCp: number;
+  evalWhiteMate?: number;
+  isThinking: boolean;
+  isEvaluatingMove: boolean;
+  showBestMove: boolean;
+  gameOver: PlayGameOverStatus | null;
 }
 
 export interface ReviewStoreState {
@@ -36,6 +100,7 @@ export interface ReviewStoreState {
   explanations: Record<number, CoachExplanationResponse>;
   storyline: GameStorylineResponse | null;
   retryState: RetryState;
+  playMode: PlayModeState;
 
   setPgnInput: (pgn: string) => void;
   setAnalyzing: (completed?: number, total?: number) => void;
@@ -64,6 +129,28 @@ export interface ReviewStoreState {
   startPunishMode: () => void;
   exitRetryMode: () => void;
   submitRetryMove: (from: string, to: string, promotion?: string) => { solved: boolean; san?: string };
+
+  startPlayMode: (mode?: PlayStartMode, activeCustomFen?: string | null) => void;
+  setPlayTargetElo: (elo: number) => void;
+  togglePlayBestMove: () => void;
+  setPlayShowBestMove: (show: boolean) => void;
+  setPlayThinking: (thinking: boolean) => void;
+  setPlayEvaluatingMove: (evaluating: boolean) => void;
+  recordPlayEngineEval: (posEval: PositionEval) => void;
+  applyUserPlayMove: (input: {
+    from: Square;
+    to: Square;
+    promotion?: string;
+  }) => { moved: boolean; move?: PlayMoveRecord; san?: string; fenBefore?: string; fenAfter?: string; isGameOver?: boolean };
+  attachPlayMoveGrade: (moveId: string, grade: PlayGradedMove) => void;
+  applyEnginePlayMove: (input: {
+    uci: string;
+    evalAfter?: PositionEval;
+  }) => { moved: boolean; move?: PlayMoveRecord; isGameOver?: boolean };
+  undoPlayMove: () => void;
+  restartPlayMode: () => void;
+  exitPlayMode: () => void;
+
   reset: () => void;
 }
 
@@ -76,6 +163,31 @@ const INITIAL_RETRY_STATE: RetryState = {
   status: "idle",
   feedback: null,
   attempts: 0,
+};
+
+const INITIAL_PLAY_MODE_STATE: PlayModeState = {
+  active: false,
+  startMode: "board",
+  anchorFen: DEFAULT_CHESS_START_FEN,
+  anchorPly: 0,
+  anchorDescription: "Opening position",
+  anchorWhiteCp: 0,
+  anchorWhiteMate: undefined,
+  userColor: "w",
+  targetElo: PLAY_DEFAULT_FALLBACK_ELO,
+  matchedElo: PLAY_DEFAULT_FALLBACK_ELO,
+  matchedEloSource: "default",
+  fen: DEFAULT_CHESS_START_FEN,
+  moves: [],
+  undoStack: [],
+  lastMove: null,
+  currentEval: null,
+  evalWhiteCp: 0,
+  evalWhiteMate: undefined,
+  isThinking: false,
+  isEvaluatingMove: false,
+  showBestMove: false,
+  gameOver: null,
 };
 
 export function getActiveMove(analysis: GameAnalysis | null, currentPly: number): AnalyzedMove | null {
@@ -99,6 +211,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   explanations: {},
   storyline: null,
   retryState: INITIAL_RETRY_STATE,
+  playMode: INITIAL_PLAY_MODE_STATE,
 
   setPgnInput: (pgn) => set({ pgnInput: pgn }),
 
@@ -114,6 +227,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       analysis: null,
       analysisStatus: "error",
       analysisError: message,
+      playMode: INITIAL_PLAY_MODE_STATE,
     }),
 
   setAnalysis: (analysis) =>
@@ -127,6 +241,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       explanations: {},
       storyline: null,
       retryState: INITIAL_RETRY_STATE,
+      playMode: INITIAL_PLAY_MODE_STATE,
     }),
 
   setCoachColor: (coachColor) =>
@@ -135,6 +250,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       explanations: {},
       storyline: null,
       retryState: INITIAL_RETRY_STATE,
+      playMode: INITIAL_PLAY_MODE_STATE,
     }),
 
   setPersonaId: (personaId) => set({ personaId, explanations: {}, storyline: null }),
@@ -230,6 +346,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
     set({
       showBestMove: false,
       bestMovePreviewIndex: 0,
+      playMode: INITIAL_PLAY_MODE_STATE,
       retryState: {
         active: true,
         ply: move.ply,
@@ -273,6 +390,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
     set({
       showBestMove: false,
       bestMovePreviewIndex: 0,
+      playMode: INITIAL_PLAY_MODE_STATE,
       retryState: {
         active: true,
         ply: move.ply,
@@ -347,6 +465,330 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
     return { solved: false, san: played.san };
   },
 
+  startPlayMode: (mode = "board", activeCustomFen = null) => {
+    const { analysis, currentPly, coachColor } = get();
+    const anchor = resolvePlayAnchor({
+      analysis,
+      currentPly,
+      activeCustomFen,
+      coachColor,
+      startMode: mode,
+    });
+    const matched = resolveMatchedElo(analysis, coachColor);
+
+    let initialWhiteCp = 0;
+    let initialWhiteMate: number | undefined;
+    if (analysis && !activeCustomFen) {
+      if (anchor.anchorPly === 0) {
+        initialWhiteCp = analysis.startEval?.whiteCp ?? 0;
+        initialWhiteMate = analysis.startEval?.whiteMate;
+      } else {
+        const anchorMove = analysis.moves[anchor.anchorPly - 1];
+        if (anchorMove) {
+          initialWhiteCp = anchorMove.whiteCp;
+          initialWhiteMate = anchorMove.whiteMate;
+        }
+      }
+    }
+
+    const gameOver = getPlayGameOverStatus(anchor.fen, anchor.userColor);
+    const engineToMoveFirst = !gameOver && getFenTurn(anchor.fen) !== anchor.userColor;
+
+    set({
+      showBestMove: false,
+      bestMovePreviewIndex: 0,
+      retryState: INITIAL_RETRY_STATE,
+      playMode: {
+        active: true,
+        startMode: mode,
+        anchorFen: anchor.fen,
+        anchorPly: anchor.anchorPly,
+        anchorDescription: anchor.description,
+        anchorWhiteCp: initialWhiteCp,
+        anchorWhiteMate: initialWhiteMate,
+        userColor: anchor.userColor,
+        targetElo: matched.elo,
+        matchedElo: matched.elo,
+        matchedEloSource: matched.source,
+        fen: anchor.fen,
+        moves: [],
+        undoStack: [],
+        lastMove: null,
+        currentEval: null,
+        evalWhiteCp: initialWhiteCp,
+        evalWhiteMate: initialWhiteMate,
+        isThinking: engineToMoveFirst,
+        isEvaluatingMove: false,
+        showBestMove: false,
+        gameOver,
+      },
+    });
+  },
+
+  setPlayTargetElo: (elo) =>
+    set((state) => ({
+      playMode: {
+        ...state.playMode,
+        targetElo: clampPlayElo(elo),
+      },
+    })),
+
+  togglePlayBestMove: () =>
+    set((state) => ({
+      playMode: {
+        ...state.playMode,
+        showBestMove: !state.playMode.showBestMove,
+      },
+    })),
+
+  setPlayShowBestMove: (show) =>
+    set((state) => ({
+      playMode: {
+        ...state.playMode,
+        showBestMove: show,
+      },
+    })),
+
+  setPlayThinking: (isThinking) =>
+    set((state) => ({
+      playMode: {
+        ...state.playMode,
+        isThinking,
+      },
+    })),
+
+  setPlayEvaluatingMove: (isEvaluatingMove) =>
+    set((state) => ({
+      playMode: {
+        ...state.playMode,
+        isEvaluatingMove,
+      },
+    })),
+
+  recordPlayEngineEval: (posEval) =>
+    set((state) => {
+      if (!state.playMode.active || posEval.fen !== state.playMode.fen) {
+        return state;
+      }
+      return {
+        playMode: {
+          ...state.playMode,
+          currentEval: posEval,
+          evalWhiteCp: posEval.whiteCp,
+          evalWhiteMate: posEval.whiteMate,
+        },
+      };
+    }),
+
+  applyUserPlayMove: ({ from, to, promotion }) => {
+    const pm = get().playMode;
+    if (!pm.active || pm.gameOver || pm.isThinking) {
+      return { moved: false };
+    }
+
+    try {
+      const chess = new Chess(pm.fen);
+      if (chess.turn() !== pm.userColor) {
+        return { moved: false };
+      }
+      const move = chess.move({
+        from,
+        to,
+        promotion: promotion as "q" | "r" | "b" | "n" | undefined,
+      });
+      if (!move) return { moved: false };
+
+      const fenAfter = chess.fen();
+      const snapshot: PlayUndoSnapshot = {
+        fen: pm.fen,
+        moves: pm.moves,
+        lastMove: pm.lastMove,
+        currentEval: pm.currentEval,
+        evalWhiteCp: pm.evalWhiteCp,
+        evalWhiteMate: pm.evalWhiteMate,
+      };
+      const record: PlayMoveRecord = {
+        id: `play-${pm.moves.length + 1}-${move.from}${move.to}`,
+        ply: pm.anchorPly + pm.moves.length + 1,
+        moveNumber: new Chess(pm.fen).moveNumber(),
+        color: move.color,
+        san: move.san,
+        uci: `${move.from}${move.to}${move.promotion ?? ""}`,
+        from: move.from,
+        to: move.to,
+        fenBefore: pm.fen,
+        fenAfter,
+        by: "user",
+      };
+      const gameOver = getPlayGameOverStatus(fenAfter, pm.userColor);
+
+      set((state) => ({
+        playMode: {
+          ...state.playMode,
+          fen: fenAfter,
+          moves: [...state.playMode.moves, record],
+          undoStack: [...state.playMode.undoStack, snapshot],
+          lastMove: { from: move.from, to: move.to },
+          currentEval: null,
+          showBestMove: false,
+          gameOver,
+          isThinking: !gameOver,
+          isEvaluatingMove: true,
+        },
+      }));
+
+      return {
+        moved: true,
+        move: record,
+        san: move.san,
+        fenBefore: pm.fen,
+        fenAfter,
+        isGameOver: Boolean(gameOver),
+      };
+    } catch {
+      return { moved: false };
+    }
+  },
+
+  attachPlayMoveGrade: (moveId, grade) =>
+    set((state) => {
+      if (!state.playMode.active) return state;
+      const targetExists = state.playMode.moves.some((m) => m.id === moveId);
+      if (!targetExists) return state;
+
+      const updatedMoves = state.playMode.moves.map((m) =>
+        m.id === moveId
+          ? {
+              ...m,
+              grade,
+              evalAfterWhiteCp: grade.whiteCp,
+              evalAfterWhiteMate: grade.whiteMate,
+              evalLabel: grade.evalLabel,
+            }
+          : m
+      );
+      const stillAtMovedFen = state.playMode.fen === grade.fenAfter;
+
+      return {
+        playMode: {
+          ...state.playMode,
+          moves: updatedMoves,
+          evalWhiteCp: stillAtMovedFen ? grade.whiteCp : state.playMode.evalWhiteCp,
+          evalWhiteMate: stillAtMovedFen ? grade.whiteMate : state.playMode.evalWhiteMate,
+          isEvaluatingMove: false,
+        },
+      };
+    }),
+
+  applyEnginePlayMove: ({ uci, evalAfter }) => {
+    const pm = get().playMode;
+    if (!pm.active || pm.gameOver || !uci || uci.length < 4) {
+      return { moved: false };
+    }
+
+    try {
+      const chess = new Chess(pm.fen);
+      if (chess.turn() === pm.userColor) {
+        return { moved: false };
+      }
+
+      const from = uci.slice(0, 2) as Square;
+      const to = uci.slice(2, 4) as Square;
+      const promotion =
+        uci.length > 4 ? (uci[4] as "q" | "r" | "b" | "n") : undefined;
+
+      const move = chess.move({ from, to, promotion });
+      if (!move) return { moved: false };
+
+      const fenAfter = chess.fen();
+      const record: PlayMoveRecord = {
+        id: `play-${pm.moves.length + 1}-${move.from}${move.to}`,
+        ply: pm.anchorPly + pm.moves.length + 1,
+        moveNumber: new Chess(pm.fen).moveNumber(),
+        color: move.color,
+        san: move.san,
+        uci: `${move.from}${move.to}${move.promotion ?? ""}`,
+        from: move.from,
+        to: move.to,
+        fenBefore: pm.fen,
+        fenAfter,
+        by: "engine",
+        evalAfterWhiteCp: evalAfter?.whiteCp,
+        evalAfterWhiteMate: evalAfter?.whiteMate,
+      };
+      const gameOver = getPlayGameOverStatus(fenAfter, pm.userColor);
+
+      set((state) => ({
+        playMode: {
+          ...state.playMode,
+          fen: fenAfter,
+          moves: [...state.playMode.moves, record],
+          lastMove: { from: move.from, to: move.to },
+          currentEval: evalAfter ?? null,
+          evalWhiteCp: evalAfter ? evalAfter.whiteCp : state.playMode.evalWhiteCp,
+          evalWhiteMate: evalAfter ? evalAfter.whiteMate : state.playMode.evalWhiteMate,
+          isThinking: false,
+          gameOver,
+        },
+      }));
+
+      return { moved: true, move: record, isGameOver: Boolean(gameOver) };
+    } catch {
+      return { moved: false };
+    }
+  },
+
+  undoPlayMove: () =>
+    set((state) => {
+      const pm = state.playMode;
+      if (!pm.active || pm.undoStack.length === 0) return state;
+      const snapshot = pm.undoStack[pm.undoStack.length - 1];
+      const nextUndoStack = pm.undoStack.slice(0, -1);
+      return {
+        playMode: {
+          ...pm,
+          fen: snapshot.fen,
+          moves: snapshot.moves,
+          undoStack: nextUndoStack,
+          lastMove: snapshot.lastMove,
+          currentEval: snapshot.currentEval,
+          evalWhiteCp: snapshot.evalWhiteCp,
+          evalWhiteMate: snapshot.evalWhiteMate,
+          isThinking: false,
+          isEvaluatingMove: false,
+          showBestMove: false,
+          gameOver: getPlayGameOverStatus(snapshot.fen, pm.userColor),
+        },
+      };
+    }),
+
+  restartPlayMode: () =>
+    set((state) => {
+      const pm = state.playMode;
+      if (!pm.active) return state;
+      const gameOver = getPlayGameOverStatus(pm.anchorFen, pm.userColor);
+      const engineToMoveFirst =
+        !gameOver && getFenTurn(pm.anchorFen) !== pm.userColor;
+      return {
+        playMode: {
+          ...pm,
+          fen: pm.anchorFen,
+          moves: [],
+          undoStack: [],
+          lastMove: null,
+          currentEval: null,
+          evalWhiteCp: pm.anchorWhiteCp,
+          evalWhiteMate: pm.anchorWhiteMate,
+          isThinking: engineToMoveFirst,
+          isEvaluatingMove: false,
+          showBestMove: false,
+          gameOver,
+        },
+      };
+    }),
+
+  exitPlayMode: () => set({ playMode: INITIAL_PLAY_MODE_STATE }),
+
   reset: () =>
     set({
       pgnInput: "",
@@ -363,5 +805,6 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       explanations: {},
       storyline: null,
       retryState: INITIAL_RETRY_STATE,
+      playMode: INITIAL_PLAY_MODE_STATE,
     }),
 }));

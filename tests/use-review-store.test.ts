@@ -401,3 +401,125 @@ describe("useReviewStore (Zustand reactive review state)", () => {
     expect(useReviewStore.getState().storyline).toBeNull();
   });
 });
+
+describe("Play-from-Position store state", () => {
+  beforeEach(() => {
+    useReviewStore.getState().reset();
+  });
+
+  it("initializes Play Mode from current board or before-move error with matched ELO and opponent-first support", () => {
+    const fixture = buildFixtureAnalysis();
+    const store = useReviewStore.getState();
+    store.setAnalysis(fixture);
+    store.setCoachColor("black");
+    store.jumpToPly(4); // Black's 2... Ke7?? blunder
+
+    // Mutually exclusive with retry mode
+    store.startRetryMode();
+    expect(useReviewStore.getState().retryState.active).toBe(true);
+
+    store.startPlayMode("before-move");
+    let pm = useReviewStore.getState().playMode;
+    expect(useReviewStore.getState().retryState.active).toBe(false);
+    expect(pm.active).toBe(true);
+    expect(pm.startMode).toBe("before-move");
+    expect(pm.anchorFen).toBe(fixture.moves[3].fenBefore);
+    expect(pm.fen).toBe(fixture.moves[3].fenBefore);
+    expect(pm.userColor).toBe("b");
+    expect(pm.matchedElo).toBe(1120); // Black estimated ELO from fixture
+    expect(pm.targetElo).toBe(1120);
+    expect(pm.isThinking).toBe(false); // Black to move in fenBefore of 2...Ke7
+
+    // Starting at ply 1 (1. e4) for Black (ply 1 fenAfter has Black to move -> false,
+    // wait: at ply 2 fenAfter (1...e5), it is White's turn while userColor is Black -> engine moves first!)
+    store.jumpToPly(2);
+    store.startPlayMode("board");
+    pm = useReviewStore.getState().playMode;
+    expect(pm.fen).toBe(fixture.moves[1].fenAfter);
+    expect(pm.isThinking).toBe(true);
+  });
+
+  it("applies user moves, grades, engine replies, 2-ply undo, 1-ply undo during engine turn, restart, and exit", () => {
+    const fixture = buildFixtureAnalysis();
+    const store = useReviewStore.getState();
+    store.setAnalysis(fixture);
+    store.setCoachColor("white");
+    store.jumpToPly(0);
+    store.startPlayMode("board");
+
+    // Pre-evaluation on user turn + Show Best Move toggle
+    store.recordPlayEngineEval({
+      fen: useReviewStore.getState().playMode.fen,
+      depth: 12,
+      bestMoveUci: "e2e4",
+      bestMoveSan: "e4",
+      whiteCp: 25,
+      lines: [{ multipv: 1, cp: 25, pvUci: ["e2e4", "e7e5"], pvSan: ["e4", "e5"] }],
+    });
+    store.togglePlayBestMove();
+    expect(useReviewStore.getState().playMode.showBestMove).toBe(true);
+    expect(useReviewStore.getState().playMode.currentEval?.bestMoveSan).toBe("e4");
+
+    // ELO control clamps to [400, 3190]
+    store.setPlayTargetElo(150);
+    expect(useReviewStore.getState().playMode.targetElo).toBe(400);
+    store.setPlayTargetElo(1800);
+    expect(useReviewStore.getState().playMode.targetElo).toBe(1800);
+
+    // User plays 1. e4
+    const res = store.applyUserPlayMove({ from: "e2", to: "e4" });
+    expect(res.moved).toBe(true);
+    expect(res.san).toBe("e4");
+    let pm = useReviewStore.getState().playMode;
+    expect(pm.moves).toHaveLength(1);
+    expect(pm.undoStack).toHaveLength(1);
+    expect(pm.showBestMove).toBe(false);
+    expect(pm.isThinking).toBe(true);
+    expect(pm.isEvaluatingMove).toBe(true);
+
+    // Stockfish replies 1... e5
+    const engRes = store.applyEnginePlayMove({
+      uci: "e7e5",
+      evalAfter: {
+        fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+        depth: 10,
+        bestMoveUci: "g1f3",
+        bestMoveSan: "Nf3",
+        whiteCp: 30,
+        lines: [],
+      },
+    });
+    expect(engRes.moved).toBe(true);
+    pm = useReviewStore.getState().playMode;
+    expect(pm.moves).toHaveLength(2);
+    expect(pm.undoStack).toHaveLength(1); // Still 1 snapshot (atomic undo skips back to before user move)
+    expect(pm.isThinking).toBe(false);
+
+    // Undo after engine reply pops back 2 plies to start position
+    store.undoPlayMove();
+    pm = useReviewStore.getState().playMode;
+    expect(pm.fen).toBe(fixture.startFen);
+    expect(pm.moves).toHaveLength(0);
+    expect(pm.undoStack).toHaveLength(0);
+    expect(pm.isThinking).toBe(false);
+
+    // Play 1. e4 again and Undo IMMEDIATELY before engine replies (1-ply rollback)
+    store.applyUserPlayMove({ from: "e2", to: "e4" });
+    expect(useReviewStore.getState().playMode.isThinking).toBe(true);
+    store.undoPlayMove();
+    expect(useReviewStore.getState().playMode.moves).toHaveLength(0);
+    expect(useReviewStore.getState().playMode.isThinking).toBe(false);
+
+    // Play 1. e4 then Restart Here
+    store.applyUserPlayMove({ from: "e2", to: "e4" });
+    store.restartPlayMode();
+    expect(useReviewStore.getState().playMode.fen).toBe(fixture.startFen);
+    expect(useReviewStore.getState().playMode.moves).toHaveLength(0);
+    expect(useReviewStore.getState().playMode.targetElo).toBe(1800);
+
+    // Exit returns to inactive state cleanly
+    store.exitPlayMode();
+    expect(useReviewStore.getState().playMode.active).toBe(false);
+    expect(useReviewStore.getState().playMode.moves).toHaveLength(0);
+  });
+});
