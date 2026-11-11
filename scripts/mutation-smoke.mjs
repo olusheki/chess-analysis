@@ -323,6 +323,25 @@ const MUTANTS = [
     replacement: "const userWon = chess.turn() === userColor;",
     testFile: "tests/play-session.test.ts",
   },
+  {
+    name: "M44: Reintroduce raw undefined eval interpolation in formatEvalShiftClause in offline-coach.ts",
+    file: "src/lib/ai/offline-coach.ts",
+    target: `  const before = cleanString(evalBefore);
+  const after = cleanString(evalAfter);
+  if (before && after) return \` (\${before} to \${after})\`;
+  if (after) return \` (evaluation: \${after})\`;
+  if (before) return \` (from \${before})\`;
+  return "";`,
+    replacement: `  return \` (\${evalBefore} to \${evalAfter})\`;`,
+    testFile: "tests/gemini-coach.test.ts",
+  },
+  {
+    name: "M45: Bypass optional eval/moveNumber runtime type validation in api/explain/route.ts",
+    file: "src/app/api/explain/route.ts",
+    target: `        !isOptionalString(reqPayload.evalBefore) ||`,
+    replacement: `        false ||`,
+    testFile: "tests/api-routes.test.ts",
+  },
 ];
 
 let killed = 0;

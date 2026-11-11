@@ -8,6 +8,73 @@ import {
 
 const VALID_BADGES = new Set<string>(Object.keys(BADGE_METADATA));
 
+function isOptionalString(v: unknown): v is string | undefined {
+  return v === undefined || typeof v === "string";
+}
+
+function isPositiveIntOrUndefined(v: unknown): boolean {
+  return v === undefined || (typeof v === "number" && Number.isInteger(v) && v >= 1);
+}
+
+function isValidMoveArrayOrUndefined(v: unknown): v is string[] | undefined {
+  return v === undefined || (Array.isArray(v) && v.every((m) => typeof m === "string"));
+}
+
+function sanitizeMoveArray(v: string[] | undefined): string[] {
+  return Array.isArray(v) ? v.map((m) => m.trim()).filter(Boolean) : [];
+}
+
+function isFiniteNum(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function isValidPhasePair(v: unknown): boolean {
+  if (!v || typeof v !== "object") return false;
+  const pair = v as Record<string, unknown>;
+  return isFiniteNum(pair.white) && isFiniteNum(pair.black);
+}
+
+function isValidStorylinePayload(reqPayload: Partial<GameStorylineRequest>): boolean {
+  if (
+    typeof reqPayload.whiteName !== "string" ||
+    !reqPayload.whiteName.trim() ||
+    typeof reqPayload.blackName !== "string" ||
+    !reqPayload.blackName.trim() ||
+    typeof reqPayload.result !== "string" ||
+    !reqPayload.result.trim() ||
+    !isFiniteNum(reqPayload.whiteAccuracy) ||
+    !isFiniteNum(reqPayload.blackAccuracy) ||
+    !isFiniteNum(reqPayload.whiteElo) ||
+    !isFiniteNum(reqPayload.blackElo) ||
+    !isFiniteNum(reqPayload.keyMomentCount) ||
+    !reqPayload.phaseAccuracies ||
+    typeof reqPayload.phaseAccuracies !== "object" ||
+    !isValidPhasePair(reqPayload.phaseAccuracies.opening) ||
+    !isValidPhasePair(reqPayload.phaseAccuracies.middlegame) ||
+    !isValidPhasePair(reqPayload.phaseAccuracies.endgame) ||
+    (reqPayload.coachFor !== undefined &&
+      reqPayload.coachFor !== "White" &&
+      reqPayload.coachFor !== "Black")
+  ) {
+    return false;
+  }
+
+  if (reqPayload.phaseMoveCounts !== undefined) {
+    const counts = reqPayload.phaseMoveCounts as unknown as Record<string, unknown>;
+    if (
+      !counts ||
+      typeof counts !== "object" ||
+      !isValidPhasePair(counts.opening) ||
+      !isValidPhasePair(counts.middlegame) ||
+      !isValidPhasePair(counts.endgame)
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -32,14 +99,19 @@ export async function POST(request: NextRequest) {
         typeof reqPayload.badge !== "string" ||
         !VALID_BADGES.has(reqPayload.badge) ||
         (reqPayload.playedBy !== "White" && reqPayload.playedBy !== "Black") ||
-        typeof reqPayload.deltaWP !== "number" ||
-        !Number.isFinite(reqPayload.deltaWP) ||
+        !isFiniteNum(reqPayload.deltaWP) ||
         !reqPayload.tacticalContext ||
         typeof reqPayload.tacticalContext !== "object" ||
         !Array.isArray(reqPayload.tacticalContext.tags) ||
         (reqPayload.coachFor !== undefined &&
           reqPayload.coachFor !== "White" &&
-          reqPayload.coachFor !== "Black")
+          reqPayload.coachFor !== "Black") ||
+        !isOptionalString(reqPayload.evalBefore) ||
+        !isOptionalString(reqPayload.evalAfter) ||
+        !isOptionalString(reqPayload.engineBestMove) ||
+        !isPositiveIntOrUndefined(reqPayload.moveNumber) ||
+        !isValidMoveArrayOrUndefined(reqPayload.bestMovePV) ||
+        !isValidMoveArrayOrUndefined(reqPayload.refutationPV)
       ) {
         return NextResponse.json(
           { error: "Missing or invalid move explanation fields." },
@@ -49,24 +121,22 @@ export async function POST(request: NextRequest) {
       const explanation = await coach.explainMove({
         ...reqPayload,
         badge: reqPayload.badge as MoveBadge,
-        bestMovePV: Array.isArray(reqPayload.bestMovePV) ? reqPayload.bestMovePV : [],
+        evalBefore: reqPayload.evalBefore?.trim() ?? "",
+        evalAfter: reqPayload.evalAfter?.trim() ?? "",
+        engineBestMove: reqPayload.engineBestMove?.trim() ?? "",
+        moveNumber: reqPayload.moveNumber,
+        bestMovePV: sanitizeMoveArray(reqPayload.bestMovePV),
+        refutationPV:
+          reqPayload.refutationPV !== undefined
+            ? sanitizeMoveArray(reqPayload.refutationPV)
+            : undefined,
       } as CoachExplanationRequest);
       return NextResponse.json(explanation);
     }
 
     if (mode === "storyline") {
       const reqPayload = payload as Partial<GameStorylineRequest>;
-      if (
-        typeof reqPayload.whiteName !== "string" ||
-        typeof reqPayload.blackName !== "string" ||
-        !reqPayload.phaseAccuracies ||
-        !reqPayload.phaseAccuracies.opening ||
-        !reqPayload.phaseAccuracies.middlegame ||
-        !reqPayload.phaseAccuracies.endgame ||
-        (reqPayload.coachFor !== undefined &&
-          reqPayload.coachFor !== "White" &&
-          reqPayload.coachFor !== "Black")
-      ) {
+      if (!isValidStorylinePayload(reqPayload)) {
         return NextResponse.json(
           { error: "Missing required game storyline fields." },
           { status: 400 }

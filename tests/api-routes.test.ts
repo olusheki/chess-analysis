@@ -192,6 +192,93 @@ describe("Next.js API route handlers", () => {
       const blankKeyData = await blankKeyRes.json();
       expect(blankKeyData.coachMode).toBe("offline");
     });
+
+    it("omits eval strings cleanly when optional evalBefore/evalAfter/engineBestMove/moveNumber are absent and rejects malformed types", async () => {
+      const noEvalsReq = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "move",
+          payload: {
+            moveSan: "Qh5",
+            playedBy: "White",
+            badge: "Blunder",
+            deltaWP: -33.8,
+            bestMovePV: ["Nf3", "Nc6"],
+            tacticalContext: {
+              tags: ["HANGING_PIECE"],
+              isCheck: false,
+              isCastle: false,
+              gamePhase: "Opening",
+            },
+          },
+        }),
+      });
+      const noEvalsRes = await postExplain(noEvalsReq);
+      expect(noEvalsRes.status).toBe(200);
+      const noEvalsData = await noEvalsRes.json();
+      expect(noEvalsData.coachMode).toBe("offline");
+      expect(JSON.stringify(noEvalsData)).not.toMatch(/undefined/i);
+      expect(noEvalsData.detailedExplanation).toBe(
+        "This move concedes decisive momentum. Your opponent now holds a decisive tactical continuation. Take a breath—spot the tactical clue here and carry that scan into next turn."
+      );
+      expect(noEvalsData.bestMoveReasoning).toBeUndefined();
+
+      const partialEvalReq = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "move",
+          payload: {
+            moveSan: "Qh5",
+            playedBy: "White",
+            badge: "Blunder",
+            evalAfter: "-4.5",
+            deltaWP: -33.8,
+            engineBestMove: "Nf3",
+            bestMovePV: ["Nf3", "Nc6"],
+            tacticalContext: { tags: [], isCheck: false, isCastle: false, gamePhase: "Opening" },
+          },
+        }),
+      });
+      const partialRes = await postExplain(partialEvalReq);
+      expect(partialRes.status).toBe(200);
+      const partialData = await partialRes.json();
+      expect(partialData.detailedExplanation).toContain("(evaluation: -4.5)");
+      expect(partialData.detailedExplanation).not.toMatch(/undefined/i);
+
+      const badTypePayloads = [
+        { moveSan: "Nf3", playedBy: "White", evalBefore: null, badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
+        { moveSan: "Nf3", playedBy: "White", evalAfter: 120, badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
+        { moveSan: "Nf3", playedBy: "White", engineBestMove: null, badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
+        { moveSan: "Nf3", playedBy: "White", moveNumber: 1.5, badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
+        { moveSan: "Nf3", playedBy: "White", moveNumber: 0, badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
+        { moveSan: "Nf3", playedBy: "White", bestMovePV: [null], badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
+        { moveSan: "Nf3", playedBy: "White", refutationPV: "Qh4#", badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
+      ];
+      for (const badPayload of badTypePayloads) {
+        const res = await postExplain(
+          new NextRequest("http://localhost:3000/api/explain", {
+            method: "POST",
+            body: JSON.stringify({ mode: "move", payload: badPayload }),
+          })
+        );
+        expect(res.status).toBe(400);
+        const err = await res.json();
+        expect(err.error).toBe("Missing or invalid move explanation fields.");
+      }
+
+      const incompleteStorylineReq = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "storyline",
+          payload: {
+            whiteName: "Morphy",
+            blackName: "Duke",
+            phaseAccuracies: { opening: { white: 98, black: 85 }, middlegame: {}, endgame: {} },
+          },
+        }),
+      });
+      expect((await postExplain(incompleteStorylineReq)).status).toBe(400);
+    });
   });
 
   describe("/api/chesscom", () => {

@@ -34,6 +34,15 @@ const PIECE_NAME_TO_SYMBOL: Record<string, PieceSymbol> = {
   king: "k",
 };
 
+function cleanOptionalText(value?: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function cleanMoveList(lines?: unknown): string[] {
+  if (!Array.isArray(lines)) return [];
+  return lines.map(cleanOptionalText).filter(Boolean).slice(0, 4);
+}
+
 /**
  * Verifies that any "<Piece> on <square>" claim in coach text corresponds to an actual piece on that square.
  */
@@ -143,7 +152,7 @@ export class GeminiCoachService {
     const perspective = req.coachFor ?? req.playedBy;
     const isPlayerMove = req.playedBy === perspective;
     const oppSide = perspective === "White" ? "Black" : "White";
-    const oppName = req.opponentName || "Your opponent";
+    const oppName = cleanOptionalText(req.opponentName) || "Your opponent";
 
     const insights = req.coachInsights;
     const boardMap =
@@ -155,6 +164,20 @@ export class GeminiCoachService {
     const bestFuture = insights?.bestPvIntentions?.summaryFacts ?? [];
     const replyFuture = insights?.refutationPvIntentions?.summaryFacts ?? [];
     const bestTags = insights?.bestMoveTactics?.tags?.join(", ") || "";
+
+    const safeBestPv = cleanMoveList(req.bestMovePV);
+    const safeRefPv = cleanMoveList(req.refutationPV);
+    const safeBestMove = cleanOptionalText(req.engineBestMove) || safeBestPv[0] || "";
+    const safeMoveNo =
+      typeof req.moveNumber === "number" && Number.isInteger(req.moveNumber) && req.moveNumber >= 1
+        ? req.moveNumber
+        : "?";
+    const safeEvalBefore = cleanOptionalText(req.evalBefore) || "N/A";
+    const safeEvalAfter = cleanOptionalText(req.evalAfter) || "N/A";
+    const allowedRefSan = cleanOptionalText(req.tacticalContext.allowedThreat?.refutationMoveSan);
+    const allowedTarget = cleanOptionalText(req.tacticalContext.allowedThreat?.targetSummary);
+    const missedSan = cleanOptionalText(req.tacticalContext.missedTactic?.missedMoveSan);
+    const missedTarget = cleanOptionalText(req.tacticalContext.missedTactic?.targetSummary);
 
     const systemPrompt = `
 You are "${persona.name}" (${persona.title}), inspired by Chess.com's Game Review coach.
@@ -169,26 +192,26 @@ ${isPlayerMove ? `- This move was played by YOU (${perspective}). Critique or pr
 Pedagogical "Why" & Grounding Rules:
 1. Teach chess reasoning: explain WHY the engine's top choice outperforms the played move (e.g., attacking actively instead of retreating passively, developing minor pieces before castling or pushing flank pawns, exploiting a pin/fork/skewer/hanging piece, avoiding pawn-structure defects, or pursuing the future PV plan).
 2. Ground every square and piece claim STRICTLY in the provided Board Inventory, Comparative Reasoning, Tactical Tags, Best PV, and Punishment/Reply PV. NEVER invent pieces or squares that are absent from the verified board data.
-3. Keep shortComment punchy (under 15 words) in ${persona.name}'s distinct voice, detailedExplanation to 2-3 rich instructive sentences, bestMoveReasoning clearly explaining why ${req.engineBestMove} is better (if played != best), and coachingTip as 1 actionable chess principle tailored to this position.
+3. Keep shortComment punchy (under 15 words) in ${persona.name}'s distinct voice, detailedExplanation to 2-3 rich instructive sentences, bestMoveReasoning clearly explaining why ${safeBestMove || "the best continuation"} is better (if played != best), and coachingTip as 1 actionable chess principle tailored to this position.
 `;
 
     const userPrompt = `
 Analyze this move from ${perspective}'s coaching corner:
-- Move: ${req.moveSan} (Move ${req.moveNumber} played by ${req.playedBy}${isPlayerMove ? " [YOU]" : ` [OPPONENT: ${oppName}]`})
+- Move: ${req.moveSan} (Move ${safeMoveNo} played by ${req.playedBy}${isPlayerMove ? " [YOU]" : ` [OPPONENT: ${oppName}]`})
 - Game Phase: ${req.tacticalContext.gamePhase}
 - Assigned Rating: ${req.badge}
-- Evaluation Before: ${req.evalBefore} -> Evaluation After: ${req.evalAfter} (ΔWP: ${req.deltaWP.toFixed(1)}%)
+- Evaluation Before: ${safeEvalBefore} -> Evaluation After: ${safeEvalAfter} (ΔWP: ${req.deltaWP.toFixed(1)}%)
 - Opening: ${req.openingName || "Standard Opening"}
 - Played Move Tactical Tags: ${req.tacticalContext.tags.join(", ") || "None"}
 ${req.tacticalContext.hangingPieceDetails ? `- ${req.badge === "Brilliant" ? "SACRIFICED PIECE" : "HUNG PIECE"}: ${req.tacticalContext.hangingPieceDetails.piece} on ${req.tacticalContext.hangingPieceDetails.square}` : ""}
 ${req.tacticalContext.forkTargets ? `- FORK TARGETS: ${req.tacticalContext.forkTargets.map((t) => `${t.piece} on ${t.square}`).join(", ")}` : ""}
 ${req.tacticalContext.pinnedPieceDetails ? `- PINNED PIECE: ${req.tacticalContext.pinnedPieceDetails.piece} on ${req.tacticalContext.pinnedPieceDetails.square} pinned to ${req.tacticalContext.pinnedPieceDetails.pinnedTo}` : ""}
 ${req.tacticalContext.skeweredPieceDetails ? `- SKEWER: ${req.tacticalContext.skeweredPieceDetails.frontPiece} on ${req.tacticalContext.skeweredPieceDetails.frontSquare} in front of ${req.tacticalContext.skeweredPieceDetails.backPiece} on ${req.tacticalContext.skeweredPieceDetails.backSquare}` : ""}
-${req.tacticalContext.allowedThreat ? `- ALLOWED THREAT: ${req.tacticalContext.allowedThreat.kind} via ${req.tacticalContext.allowedThreat.refutationMoveSan ?? "refutation"}${req.tacticalContext.allowedThreat.targetSummary ? ` (${req.tacticalContext.allowedThreat.targetSummary})` : ""}` : ""}
-${req.tacticalContext.missedTactic ? `- MISSED TACTIC: ${req.tacticalContext.missedTactic.kind} via ${req.tacticalContext.missedTactic.missedMoveSan ?? req.engineBestMove}${req.tacticalContext.missedTactic.targetSummary ? ` (${req.tacticalContext.missedTactic.targetSummary})` : ""}` : ""}
-- Mover's Engine Best Move: ${req.engineBestMove}
-- Mover's Best PV Line: ${req.bestMovePV.slice(0, 4).join(" ")}
-${req.refutationPV && req.refutationPV.length > 0 ? `- Next Reply / Punishment Line (${isPlayerMove ? oppName : "Your Reply"}): ${req.refutationPV.slice(0, 4).join(" ")}` : ""}
+${req.tacticalContext.allowedThreat ? `- ALLOWED THREAT: ${req.tacticalContext.allowedThreat.kind} via ${allowedRefSan || "refutation"}${allowedTarget ? ` (${allowedTarget})` : ""}` : ""}
+${req.tacticalContext.missedTactic ? `- MISSED TACTIC: ${req.tacticalContext.missedTactic.kind} via ${missedSan || safeBestMove || "tactic"}${missedTarget ? ` (${missedTarget})` : ""}` : ""}
+${safeBestMove ? `- Mover's Engine Best Move: ${safeBestMove}` : ""}
+${safeBestPv.length > 0 ? `- Mover's Best PV Line: ${safeBestPv.join(" ")}` : ""}
+${safeRefPv.length > 0 ? `- Next Reply / Punishment Line (${isPlayerMove ? oppName : "Your Reply"}): ${safeRefPv.join(" ")}` : ""}
 ${boardMap ? `- Verified Board Pieces After Move: ${boardMap}` : ""}
 ${bestTags ? `- Best Move Tactical Tags: ${bestTags}` : ""}
 ${whyLines.length > 0 ? `- Comparative Chess Reasons ("Why Better"): ${whyLines.join(" | ")}` : ""}
@@ -242,12 +265,12 @@ ${replyFuture.length > 0 ? `- Future Intentions Along Reply/Punishment Line: ${r
 
     const persona = getCoachPersona(req.personaId);
     const counts = req.phaseMoveCounts;
-    const openW = formatPhaseMetric(req.phaseAccuracies.opening.white, counts?.opening.white);
-    const openB = formatPhaseMetric(req.phaseAccuracies.opening.black, counts?.opening.black);
-    const midW = formatPhaseMetric(req.phaseAccuracies.middlegame.white, counts?.middlegame.white);
-    const midB = formatPhaseMetric(req.phaseAccuracies.middlegame.black, counts?.middlegame.black);
-    const endW = formatPhaseMetric(req.phaseAccuracies.endgame.white, counts?.endgame.white);
-    const endB = formatPhaseMetric(req.phaseAccuracies.endgame.black, counts?.endgame.black);
+    const openW = formatPhaseMetric(req.phaseAccuracies.opening.white, counts?.opening?.white);
+    const openB = formatPhaseMetric(req.phaseAccuracies.opening.black, counts?.opening?.black);
+    const midW = formatPhaseMetric(req.phaseAccuracies.middlegame.white, counts?.middlegame?.white);
+    const midB = formatPhaseMetric(req.phaseAccuracies.middlegame.black, counts?.middlegame?.black);
+    const endW = formatPhaseMetric(req.phaseAccuracies.endgame.white, counts?.endgame?.white);
+    const endB = formatPhaseMetric(req.phaseAccuracies.endgame.black, counts?.endgame?.black);
     const coachPerspective = req.coachFor
       ? `Coach Perspective: Speak from ${req.coachFor}'s corner ("You" = ${req.coachFor === "White" ? req.whiteName : req.blackName}).`
       : "";

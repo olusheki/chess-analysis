@@ -15,13 +15,13 @@ export interface CoachExplanationRequest {
   coachFor?: "White" | "Black";
   playerName?: string;
   opponentName?: string;
-  moveNumber: number;
+  moveNumber?: number;
   badge: MoveBadge;
   openingName?: string;
-  evalBefore: string;
-  evalAfter: string;
+  evalBefore?: string;
+  evalAfter?: string;
   deltaWP: number;
-  engineBestMove: string;
+  engineBestMove?: string;
   bestMovePV: string[];
   refutationPV?: string[];
   tacticalContext: TacticalContext;
@@ -200,18 +200,49 @@ function formatInlineOpp(oppLabel: string): string {
   return oppLabel === "Your opponent" ? "your opponent" : oppLabel;
 }
 
+function cleanString(value?: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function formatEvalShiftClause(evalBefore?: unknown, evalAfter?: unknown): string {
+  const before = cleanString(evalBefore);
+  const after = cleanString(evalAfter);
+  if (before && after) return ` (${before} to ${after})`;
+  if (after) return ` (evaluation: ${after})`;
+  if (before) return ` (from ${before})`;
+  return "";
+}
+
+function formatEvalAtClause(prefix: string, evalAfter?: unknown): string {
+  const after = cleanString(evalAfter);
+  return after ? `${prefix}${after}` : "";
+}
+
+function formatPlayerBestReasoning(
+  bestMove: string,
+  bestSeq: string,
+  futureBestFact: string,
+  style: OfflinePersonaStyle
+): string | undefined {
+  if (!bestMove) {
+    return futureBestFact || undefined;
+  }
+  return `${style.bestReasonLead(bestMove, bestSeq || bestMove)}${futureBestFact ? ` ${futureBestFact}` : ""}`;
+}
+
 export function formatLineSeq(
   lines?: string[],
   maxMoves = 4,
   startMoveNumber?: number,
   startColor?: "w" | "b"
 ): string {
-  if (!lines || lines.length === 0) return "";
-  const slice = lines.slice(0, maxMoves);
+  if (!Array.isArray(lines) || lines.length === 0) return "";
+  const slice = lines.map(cleanString).filter(Boolean).slice(0, maxMoves);
+  if (slice.length === 0) return "";
   if (
     typeof startMoveNumber !== "number" ||
-    !Number.isFinite(startMoveNumber) ||
-    startMoveNumber <= 0 ||
+    !Number.isInteger(startMoveNumber) ||
+    startMoveNumber < 1 ||
     !startColor
   ) {
     return slice.join(" ");
@@ -341,42 +372,46 @@ function describeErrorThreats(
   const notes: string[] = [];
   if (ctx.allowedThreat) {
     const t = ctx.allowedThreat;
+    const refSan = cleanString(t.refutationMoveSan);
+    const target = cleanString(t.targetSummary);
     if (t.kind === "CHECKMATE") {
       notes.push(
         isPlayerMove
-          ? `This allows ${inlineOpp} to deliver checkmate with ${t.refutationMoveSan ?? "checkmate"}${t.targetSummary ? ` against ${t.targetSummary}` : ""}.`
-          : `${oppLabel} allows you to deliver checkmate (${t.refutationMoveSan ?? "checkmate"})${t.targetSummary ? ` against ${t.targetSummary}` : ""}.`
+          ? `This allows ${inlineOpp} to deliver checkmate with ${refSan || "checkmate"}${target ? ` against ${target}` : ""}.`
+          : `${oppLabel} allows you to deliver checkmate (${refSan || "checkmate"})${target ? ` against ${target}` : ""}.`
       );
     } else if (t.kind === "FORK") {
       notes.push(
         isPlayerMove
-          ? `This allows ${t.refutationMoveSan ?? "a fork"}, forking ${t.targetSummary ?? "two valuable pieces"}.`
-          : `${oppLabel} allows ${t.refutationMoveSan ?? "a fork"}, forking ${t.targetSummary ?? "two valuable pieces"}.`
+          ? `This allows ${refSan || "a fork"}, forking ${target || "two valuable pieces"}.`
+          : `${oppLabel} allows ${refSan || "a fork"}, forking ${target || "two valuable pieces"}.`
       );
     }
   }
   if (ctx.missedTactic) {
     const m = ctx.missedTactic;
+    const missedSan = cleanString(m.missedMoveSan);
+    const target = cleanString(m.targetSummary);
     if (m.kind === "CHECKMATE") {
       notes.push(
         isPlayerMove
-          ? `You missed immediate checkmate with ${m.missedMoveSan ?? "mate"}${m.targetSummary ? ` against ${m.targetSummary}` : ""}.`
-          : `${oppLabel} missed immediate checkmate with ${m.missedMoveSan ?? "mate"}${m.targetSummary ? ` against ${m.targetSummary}` : ""}.`
+          ? `You missed immediate checkmate with ${missedSan || "mate"}${target ? ` against ${target}` : ""}.`
+          : `${oppLabel} missed immediate checkmate with ${missedSan || "mate"}${target ? ` against ${target}` : ""}.`
       );
     } else if (m.kind === "FORK") {
       notes.push(
         isPlayerMove
-          ? `You missed ${m.missedMoveSan ?? "a fork"}, forking ${m.targetSummary ?? "two valuable pieces"}.`
-          : `${oppLabel} missed ${m.missedMoveSan ?? "a fork"}, forking ${m.targetSummary ?? "two valuable pieces"}.`
+          ? `You missed ${missedSan || "a fork"}, forking ${target || "two valuable pieces"}.`
+          : `${oppLabel} missed ${missedSan || "a fork"}, forking ${target || "two valuable pieces"}.`
       );
     } else if (m.kind === "FREE_CAPTURE") {
       const captureText = m.isExchange
-        ? `the exchange (${m.targetSummary ?? "Rook"})`
-        : `the ${m.targetSummary ?? "material"}`;
+        ? `the exchange (${target || "Rook"})`
+        : `the ${target || "material"}`;
       notes.push(
         isPlayerMove
-          ? `You missed winning ${captureText} with ${m.missedMoveSan ?? "capture"}.`
-          : `${oppLabel} missed winning ${captureText} with ${m.missedMoveSan ?? "capture"}.`
+          ? `You missed winning ${captureText} with ${missedSan || "capture"}.`
+          : `${oppLabel} missed winning ${captureText} with ${missedSan || "capture"}.`
       );
     }
   }
@@ -391,7 +426,10 @@ function buildOpponentMoveOfflineExplanation(
   bestSeq: string,
   style: OfflinePersonaStyle
 ): CoachExplanationResponse {
-  const { badge, moveSan, engineBestMove, coachInsights } = req;
+  const { badge, moveSan, coachInsights } = req;
+  const safeBestMove = cleanString(req.engineBestMove);
+  const evalShift = formatEvalShiftClause(req.evalBefore, req.evalAfter);
+  const evalAfterLabel = cleanString(req.evalAfter);
   const inlineOpp = formatInlineOpp(oppLabel);
   const whyCompare = pickComparativeReason(coachInsights);
   const oppThreatNote = describeErrorThreats(req.tacticalContext, oppLabel, false);
@@ -408,12 +446,18 @@ function buildOpponentMoveOfflineExplanation(
     const targetNote = req.tacticalContext.hangingPieceDetails
       ? ` Their ${req.tacticalContext.hangingPieceDetails.piece} on ${req.tacticalContext.hangingPieceDetails.square} is exposed.`
       : "";
-    const oppReasonBase = style.oppBestReasonLead(inlineOpp, engineBestMove, bestSeq);
-    const bestReasoning = whyCompare ? `${oppReasonBase} (${whyCompare})` : oppReasonBase;
+    const oppReasonBase = safeBestMove
+      ? style.oppBestReasonLead(inlineOpp, safeBestMove, bestSeq || safeBestMove)
+      : "";
+    const bestReasoning = oppReasonBase
+      ? whyCompare
+        ? `${oppReasonBase} (${whyCompare})`
+        : oppReasonBase
+      : whyCompare || undefined;
     return {
       badge,
       shortComment: style.oppSlipHeadline(oppLabel, moveSan, badge),
-      detailedExplanation: `${oppLabel}'s ${moveSan} shifted the evaluation (${req.evalBefore} to ${req.evalAfter}).${targetNote}${oppThreatNote ? ` ${oppThreatNote}` : ""} ${tacticalDetail ? `${tacticalDetail} ` : ""}${replyClause}${pvFuture ? ` ${pvFuture}` : ""}`.trim(),
+      detailedExplanation: `${oppLabel}'s ${moveSan} shifted the evaluation${evalShift}.${targetNote}${oppThreatNote ? ` ${oppThreatNote}` : ""} ${tacticalDetail ? `${tacticalDetail} ` : ""}${replyClause}${pvFuture ? ` ${pvFuture}` : ""}`.trim(),
       bestMoveReasoning: bestReasoning,
       variationTitle: "Your Opportunity to Strike",
       coachingTip: pickTailoredTip(coachInsights, style.oppSlipTip, style),
@@ -422,13 +466,17 @@ function buildOpponentMoveOfflineExplanation(
   }
 
   if (badge === "Mistake" || badge === "Inaccuracy") {
+    const insteadClause = safeBestMove ? ` instead of ${safeBestMove}` : "";
+    const oppBestReasoning = safeBestMove
+      ? whyCompare
+        ? `${safeBestMove} was stronger for ${inlineOpp} (${bestSeq || safeBestMove}): ${whyCompare}`
+        : `${safeBestMove} was stronger for ${inlineOpp} (${bestSeq || safeBestMove}).`
+      : whyCompare || undefined;
     return {
       badge,
       shortComment: style.oppSlipHeadline(oppLabel, moveSan, badge),
-      detailedExplanation: `${oppLabel} conceded ${req.deltaWP.toFixed(1)}% win probability (${req.evalBefore} to ${req.evalAfter}) instead of ${engineBestMove}. ${oppThreatNote ? `${oppThreatNote} ` : ""}${tacticalDetail ? `${tacticalDetail} ` : ""}${replyClause}`.trim(),
-      bestMoveReasoning: whyCompare
-        ? `${engineBestMove} was stronger for ${inlineOpp} (${bestSeq}): ${whyCompare}`
-        : `${engineBestMove} was stronger for ${inlineOpp} (${bestSeq}).`,
+      detailedExplanation: `${oppLabel} conceded ${req.deltaWP.toFixed(1)}% win probability${evalShift}${insteadClause}. ${oppThreatNote ? `${oppThreatNote} ` : ""}${tacticalDetail ? `${tacticalDetail} ` : ""}${replyClause}`.trim(),
+      bestMoveReasoning: oppBestReasoning,
       variationTitle: "Your Counterplay Plan",
       coachingTip: pickTailoredTip(coachInsights, style.oppSlipTip, style),
       coachMode: "offline",
@@ -452,17 +500,20 @@ function buildOpponentMoveOfflineExplanation(
     return {
       badge,
       shortComment: style.oppStrongHeadline(oppLabel, moveSan, badge),
-      detailedExplanation: `${oppLabel}'s ${moveSan} maintains pressure at ${req.evalAfter}. ${tacticalDetail ? `Watch out: ${tacticalDetail} ` : ""}${pvIntent ? `${pvIntent} ` : ""}${refutationSeq ? `Stay alert and consider ${refutationSeq}.` : "Prioritize king safety and defend key squares."}`.trim(),
+      detailedExplanation: `${oppLabel}'s ${moveSan} maintains pressure${formatEvalAtClause(" at ", evalAfterLabel)}. ${tacticalDetail ? `Watch out: ${tacticalDetail} ` : ""}${pvIntent ? `${pvIntent} ` : ""}${refutationSeq ? `Stay alert and consider ${refutationSeq}.` : "Prioritize king safety and defend key squares."}`.trim(),
       variationTitle: "How to Defend & Counter",
       coachingTip: style.mistakeTip,
       coachMode: "offline",
     };
   }
 
+  const oppNeutralLead = evalAfterLabel
+    ? `${oppLabel}'s move keeps the evaluation around ${evalAfterLabel}.`
+    : `${oppLabel}'s move keeps the position solid.`;
   return {
     badge,
     shortComment: `${oppLabel} played a ${badge.toLowerCase()} move (${moveSan}).`,
-    detailedExplanation: `${oppLabel}'s move keeps the evaluation around ${req.evalAfter}. ${tacticalDetail ? `Threat check: ${tacticalDetail} ` : ""}${refutationSeq ? `Consider answering with ${refutationSeq}.` : ""}`.trim(),
+    detailedExplanation: `${oppNeutralLead} ${tacticalDetail ? `Threat check: ${tacticalDetail} ` : ""}${refutationSeq ? `Consider answering with ${refutationSeq}.` : ""}`.trim(),
     coachMode: "offline",
   };
 }
@@ -474,14 +525,14 @@ export function buildOfflineGameStoryline(req: GameStorylineRequest): GameStoryl
   const openingLabel = req.openingName || "the opening";
   const style = getStyle(req.personaId);
   const counts = req.phaseMoveCounts;
-  const openW = formatPhaseMetric(req.phaseAccuracies.opening.white, counts?.opening.white);
-  const openB = formatPhaseMetric(req.phaseAccuracies.opening.black, counts?.opening.black);
-  const midW = formatPhaseMetric(req.phaseAccuracies.middlegame.white, counts?.middlegame.white);
-  const midB = formatPhaseMetric(req.phaseAccuracies.middlegame.black, counts?.middlegame.black);
-  const noEndgame = counts && counts.endgame.white === 0 && counts.endgame.black === 0;
+  const openW = formatPhaseMetric(req.phaseAccuracies.opening.white, counts?.opening?.white);
+  const openB = formatPhaseMetric(req.phaseAccuracies.opening.black, counts?.opening?.black);
+  const midW = formatPhaseMetric(req.phaseAccuracies.middlegame.white, counts?.middlegame?.white);
+  const midB = formatPhaseMetric(req.phaseAccuracies.middlegame.black, counts?.middlegame?.black);
+  const noEndgame = counts && counts.endgame?.white === 0 && counts.endgame?.black === 0;
   const endgameClause = noEndgame
     ? "Endgame N/A"
-    : `Endgame ${formatPhaseMetric(req.phaseAccuracies.endgame.white, counts?.endgame.white)}/${formatPhaseMetric(req.phaseAccuracies.endgame.black, counts?.endgame.black)}`;
+    : `Endgame ${formatPhaseMetric(req.phaseAccuracies.endgame.white, counts?.endgame?.white)}/${formatPhaseMetric(req.phaseAccuracies.endgame.black, counts?.endgame?.black)}`;
 
   const headline = (() => {
     if (req.result === "1-0") {
@@ -561,10 +612,14 @@ export function buildOfflineGameStoryline(req: GameStorylineRequest): GameStoryl
  * comparative chess reasons, PV future intentions, persona style, and perspective.
  */
 export function buildOfflineMoveExplanation(req: CoachExplanationRequest): CoachExplanationResponse {
-  const { badge, tacticalContext, engineBestMove, moveSan, playedBy, coachInsights } = req;
+  const { badge, tacticalContext, moveSan, playedBy, coachInsights } = req;
+  const safeBestMove = cleanString(req.engineBestMove);
+  const evalBeforeLabel = cleanString(req.evalBefore);
+  const evalAfterLabel = cleanString(req.evalAfter);
+  const evalShift = formatEvalShiftClause(evalBeforeLabel, evalAfterLabel);
   const perspective = req.coachFor ?? playedBy;
   const isPlayerMove = playedBy === perspective;
-  const oppLabel = req.opponentName || "Your opponent";
+  const oppLabel = cleanString(req.opponentName) || "Your opponent";
   const style = getStyle(req.personaId);
   const suppressPositivePraise = badge === "Blunder" || badge === "Miss";
   const suppressCenterTag = suppressPositivePraise || badge === "Mistake" || badge === "Inaccuracy";
@@ -575,14 +630,18 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   );
   const playedTurn: "w" | "b" = playedBy === "Black" ? "b" : "w";
   const replyTurn: "w" | "b" = playedTurn === "w" ? "b" : "w";
+  const validMoveNumber =
+    typeof req.moveNumber === "number" && Number.isInteger(req.moveNumber) && req.moveNumber >= 1
+      ? req.moveNumber
+      : undefined;
   const replyMoveNumber =
-    typeof req.moveNumber === "number" && Number.isFinite(req.moveNumber)
+    validMoveNumber !== undefined
       ? playedTurn === "b"
-        ? req.moveNumber + 1
-        : req.moveNumber
+        ? validMoveNumber + 1
+        : validMoveNumber
       : undefined;
   const refutationSeq = formatLineSeq(req.refutationPV, 4, replyMoveNumber, replyTurn);
-  const bestSeq = formatLineSeq(req.bestMovePV, 4, req.moveNumber, playedTurn) || engineBestMove;
+  const bestSeq = formatLineSeq(req.bestMovePV, 4, validMoveNumber, playedTurn) || safeBestMove;
 
   if (!isPlayerMove) {
     return buildOpponentMoveOfflineExplanation(
@@ -604,14 +663,14 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (badge === "Blunder") {
     const allowedMateSan =
       tacticalContext.allowedThreat?.kind === "CHECKMATE"
-        ? tacticalContext.allowedThreat.refutationMoveSan ?? "checkmate"
+        ? cleanString(tacticalContext.allowedThreat.refutationMoveSan) || "checkmate"
         : undefined;
     if (allowedMateSan) {
       return {
         badge,
         shortComment: style.blunderHeadline(moveSan, undefined, allowedMateSan),
-        detailedExplanation: `This move concedes decisive momentum (${req.evalBefore} to ${req.evalAfter}). ${playerThreatNote ? `${playerThreatNote} ` : ""}${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
-        bestMoveReasoning: `${style.bestReasonLead(engineBestMove, bestSeq)}${futureBestFact ? ` ${futureBestFact}` : ""}`,
+        detailedExplanation: `This move concedes decisive momentum${evalShift}. ${playerThreatNote ? `${playerThreatNote} ` : ""}${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
+        bestMoveReasoning: formatPlayerBestReasoning(safeBestMove, bestSeq, futureBestFact, style),
         variationTitle: `${oppLabel}'s Mating Attack`,
         coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),
         coachMode: "offline",
@@ -620,13 +679,13 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
     if (tacticalContext.hangingPieceDetails) {
       const { piece, square } = tacticalContext.hangingPieceDetails;
       const punishClause = refutationSeq
-        ? `${oppLabel} can strike right away with ${refutationSeq}, shifting the eval to ${req.evalAfter}.`
-        : `${oppLabel} can exploit this immediately, shifting the evaluation to ${req.evalAfter}.`;
+        ? `${oppLabel} can strike right away with ${refutationSeq}${evalAfterLabel ? `, shifting the eval to ${evalAfterLabel}` : ""}.`
+        : `${oppLabel} can exploit this immediately${evalAfterLabel ? `, shifting the evaluation to ${evalAfterLabel}` : ""}.`;
       return {
         badge,
         shortComment: style.blunderHeadline(moveSan, { piece, square }),
-        detailedExplanation: `${moveSan} left your ${piece} vulnerable on ${square}. ${punishClause} ${playerThreatNote ? `${playerThreatNote} ` : ""}${comparativeReason ? `Why ${engineBestMove} outperformed: ${comparativeReason} ` : ""}${style.errorClose}`.trim(),
-        bestMoveReasoning: `${style.bestReasonLead(engineBestMove, bestSeq)}${futureBestFact ? ` ${futureBestFact}` : ""}`,
+        detailedExplanation: `${moveSan} left your ${piece} vulnerable on ${square}. ${punishClause} ${playerThreatNote ? `${playerThreatNote} ` : ""}${comparativeReason ? `Why ${safeBestMove || "the alternative"} outperformed: ${comparativeReason} ` : ""}${style.errorClose}`.trim(),
+        bestMoveReasoning: formatPlayerBestReasoning(safeBestMove, bestSeq, futureBestFact, style),
         variationTitle: `${oppLabel}'s Winning Punishment`,
         coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),
         coachMode: "offline",
@@ -638,8 +697,8 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
     return {
       badge,
       shortComment: style.blunderHeadline(moveSan),
-      detailedExplanation: `This move concedes decisive momentum (${req.evalBefore} to ${req.evalAfter}). ${playerThreatNote ? `${playerThreatNote} ` : ""}${tacticalDetail || lineClause} ${futureRefutationFact ? `${futureRefutationFact} ` : ""}${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
-      bestMoveReasoning: `${style.bestReasonLead(engineBestMove, bestSeq)}${futureBestFact ? ` ${futureBestFact}` : ""}`,
+      detailedExplanation: `This move concedes decisive momentum${evalShift}. ${playerThreatNote ? `${playerThreatNote} ` : ""}${tacticalDetail || lineClause} ${futureRefutationFact ? `${futureRefutationFact} ` : ""}${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
+      bestMoveReasoning: formatPlayerBestReasoning(safeBestMove, bestSeq, futureBestFact, style),
       variationTitle: "Punishment Line",
       coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),
       coachMode: "offline",
@@ -647,11 +706,14 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   }
 
   if (badge === "Miss") {
+    const betterFallback = bestSeq ? `Better was ${bestSeq}.` : "A stronger tactical blow was available.";
     return {
       badge,
-      shortComment: style.missHeadline(engineBestMove),
-      detailedExplanation: `${oppLabel} had just slipped, but ${moveSan} let them off the hook (${req.evalBefore} to ${req.evalAfter}). ${playerThreatNote || comparativeReason || tacticalDetail || `Better was ${bestSeq}.`} ${style.errorClose}`.trim(),
-      bestMoveReasoning: `${engineBestMove} seized a commanding edge along ${bestSeq}${futureBestFact ? ` — ${futureBestFact}` : "."}`,
+      shortComment: style.missHeadline(safeBestMove || "the winning tactic"),
+      detailedExplanation: `${oppLabel} had just slipped, but ${moveSan} let them off the hook${evalShift}. ${playerThreatNote || comparativeReason || tacticalDetail || betterFallback} ${style.errorClose}`.trim(),
+      bestMoveReasoning: safeBestMove
+        ? `${safeBestMove} seized a commanding edge along ${bestSeq || safeBestMove}${futureBestFact ? ` — ${futureBestFact}` : "."}`
+        : futureBestFact || undefined,
       variationTitle: "Missed Winning Line",
       coachingTip: pickTailoredTip(coachInsights, style.oppSlipTip, style),
       coachMode: "offline",
@@ -660,11 +722,19 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
 
   if (badge === "Mistake") {
     const punishNote = refutationSeq ? ` ${oppLabel} can press with ${refutationSeq}.` : "";
+    const shiftSentence =
+      evalBeforeLabel && evalAfterLabel
+        ? `The evaluation shifted from ${evalBeforeLabel} to ${evalAfterLabel}.`
+        : evalAfterLabel
+        ? `The evaluation shifted to ${evalAfterLabel}.`
+        : evalBeforeLabel
+        ? `The evaluation shifted from ${evalBeforeLabel}.`
+        : "The evaluation shifted unfavorably.";
     return {
       badge,
       shortComment: style.mistakeHeadline(moveSan),
-      detailedExplanation: `${tacticalContext.hangingPieceDetails ? `Your ${tacticalContext.hangingPieceDetails.piece} on ${tacticalContext.hangingPieceDetails.square} becomes vulnerable. ` : ""}${playerThreatNote ? `${playerThreatNote} ` : ""}The evaluation shifted from ${req.evalBefore} to ${req.evalAfter}.${punishNote} ${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
-      bestMoveReasoning: `${style.bestReasonLead(engineBestMove, bestSeq)}${futureBestFact ? ` ${futureBestFact}` : ""}`,
+      detailedExplanation: `${tacticalContext.hangingPieceDetails ? `Your ${tacticalContext.hangingPieceDetails.piece} on ${tacticalContext.hangingPieceDetails.square} becomes vulnerable. ` : ""}${playerThreatNote ? `${playerThreatNote} ` : ""}${shiftSentence}${punishNote} ${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
+      bestMoveReasoning: formatPlayerBestReasoning(safeBestMove, bestSeq, futureBestFact, style),
       variationTitle: "Optimal Continuation",
       coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),
       coachMode: "offline",
@@ -672,11 +742,18 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   }
 
   if (badge === "Inaccuracy") {
+    const middleNote =
+      playerThreatNote ||
+      comparativeReason ||
+      tacticalDetail ||
+      (refutationSeq ? `Watch for ${inlineOpp}'s ${refutationSeq}.` : "");
     return {
       badge,
-      shortComment: style.inaccuracyHeadline(moveSan, engineBestMove),
-      detailedExplanation: `While ${moveSan} stays playable, it trims your edge (${req.evalBefore} to ${req.evalAfter}). ${playerThreatNote || comparativeReason || tacticalDetail || (refutationSeq ? `Watch for ${inlineOpp}'s ${refutationSeq}.` : "")} ${style.errorClose}`.trim(),
-      bestMoveReasoning: `${style.bestReasonLead(engineBestMove, bestSeq)}${futureBestFact ? ` ${futureBestFact}` : ""}`,
+      shortComment: safeBestMove
+        ? style.inaccuracyHeadline(moveSan, safeBestMove)
+        : `${moveSan} lets a bit of precision slip.`,
+      detailedExplanation: `While ${moveSan} stays playable, it trims your edge${evalShift}.${middleNote ? ` ${middleNote}` : ""} ${style.errorClose}`.trim(),
+      bestMoveReasoning: formatPlayerBestReasoning(safeBestMove, bestSeq, futureBestFact, style),
       variationTitle: "More Accurate Path",
       coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),
       coachMode: "offline",
@@ -687,7 +764,7 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
     return {
       badge,
       shortComment: style.brilliantHeadline(moveSan),
-      detailedExplanation: `You sacrifice material with ${moveSan} while holding decisive control at ${req.evalAfter}. ${tacticalDetail || "Your active pieces and king attack create unstoppable compensation."} ${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim(),
+      detailedExplanation: `You sacrifice material with ${moveSan} while holding decisive control${formatEvalAtClause(" at ", evalAfterLabel)}. ${tacticalDetail || "Your active pieces and king attack create unstoppable compensation."} ${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim(),
       variationTitle: "Brilliant Continuation",
       coachingTip:
         style.id === "drillmaster"
@@ -701,7 +778,7 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
     return {
       badge,
       shortComment: style.greatHeadline(moveSan),
-      detailedExplanation: `In a razor-sharp position, ${moveSan} was the solitary resource holding the edge (${req.evalAfter}). ${tacticalDetail ? `${tacticalDetail} ` : ""}${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim(),
+      detailedExplanation: `In a razor-sharp position, ${moveSan} was the solitary resource holding the edge${evalAfterLabel ? ` (${evalAfterLabel})` : ""}. ${tacticalDetail ? `${tacticalDetail} ` : ""}${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim(),
       variationTitle: "Sole Winning Line",
       coachingTip: style.praiseClose,
       coachMode: "offline",
@@ -709,12 +786,14 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   }
 
   if (badge === "Best") {
+    const evalSuffix = formatEvalAtClause(" at ", evalAfterLabel);
+    const seqDetail = bestSeq ? ` (${bestSeq})` : "";
     return {
       badge,
       shortComment: style.bestHeadline(moveSan),
       detailedExplanation: tacticalDetail
-        ? `${tacticalDetail} You matched the engine's top line at ${req.evalAfter}. ${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim()
-        : `You matched Stockfish's sharpest idea (${bestSeq}), keeping initiative at ${req.evalAfter}. ${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim(),
+        ? `${tacticalDetail} You matched the engine's top line${evalSuffix}. ${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim()
+        : `You matched Stockfish's sharpest idea${seqDetail}, keeping initiative${evalSuffix}. ${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim(),
       variationTitle: "Engine Line",
       coachingTip: futureBestFact || style.praiseClose,
       coachMode: "offline",
@@ -757,12 +836,15 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
     };
   }
 
+  const neutralEvalClause = evalAfterLabel
+    ? `A solid continuation holding ${evalAfterLabel}. `
+    : `A solid ${badge.toLowerCase()} continuation. `;
+  const showBestHint = Boolean(safeBestMove && safeBestMove !== moveSan);
   return {
     badge,
     shortComment: `${moveSan} is a ${badge.toLowerCase()} choice.`,
-    detailedExplanation: `${tacticalDetail ? `${tacticalDetail} ` : `A solid continuation holding ${req.evalAfter}. `}${comparativeReason ? `${comparativeReason} ` : engineBestMove !== moveSan ? `${engineBestMove} offered slightly more punch. ` : ""}${style.praiseClose}`.trim(),
-    bestMoveReasoning:
-      engineBestMove !== moveSan ? style.bestReasonLead(engineBestMove, bestSeq) : undefined,
+    detailedExplanation: `${tacticalDetail ? `${tacticalDetail} ` : neutralEvalClause}${comparativeReason ? `${comparativeReason} ` : showBestHint ? `${safeBestMove} offered slightly more punch. ` : ""}${style.praiseClose}`.trim(),
+    bestMoveReasoning: showBestHint ? style.bestReasonLead(safeBestMove, bestSeq) : undefined,
     coachMode: "offline",
   };
 }

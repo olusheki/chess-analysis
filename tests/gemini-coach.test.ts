@@ -1945,4 +1945,290 @@ describe("gemini-coach & explainability grounding", () => {
     expect(oppInacc.detailedExplanation).toContain("forking");
     expect(oppInacc.detailedExplanation).not.toMatch(/(?<!^|\. )Your opponent/);
   });
+
+  it("handles omitted or whitespace evalBefore/evalAfter and engineBestMove across player and opponent badges without emitting undefined", async () => {
+    const coach = new GeminiCoachService("");
+    const badges = [
+      "Blunder",
+      "Miss",
+      "Mistake",
+      "Inaccuracy",
+      "Brilliant",
+      "Great",
+      "Best",
+      "Excellent",
+      "Good",
+      "Book",
+      "Forced",
+    ] as const;
+
+    for (const badge of badges) {
+      for (const coachFor of ["White", "Black"] as const) {
+        const contexts =
+          badge === "Blunder"
+            ? [
+                makeContext({ hangingPieceDetails: { piece: "Queen", square: "h5", value: 9 } }),
+                makeContext(),
+              ]
+            : [makeContext()];
+
+        for (const tacticalContext of contexts) {
+          const res = await coach.explainMove({
+            moveSan: "Qh5",
+            playedBy: "White",
+            coachFor,
+            opponentName: "   ",
+            badge,
+            evalBefore: badge === "Mistake" ? "   " : undefined,
+            evalAfter: undefined,
+            deltaWP: 12.5,
+            engineBestMove: undefined as unknown as string,
+            moveNumber: 1.5 as unknown as number,
+            bestMovePV: [null, "  ", undefined] as unknown as string[],
+            refutationPV: ["", null] as unknown as string[],
+            tacticalContext,
+          });
+          const serialized = JSON.stringify(res);
+          expect(serialized).not.toMatch(/undefined|null/i);
+          expect(res.detailedExplanation).not.toContain("()");
+          expect(res.detailedExplanation).not.toContain("( to )");
+          expect(res.detailedExplanation).not.toMatch(/\bat\s+\./);
+          expect(res.detailedExplanation).not.toMatch(/\baround\s+\./);
+          expect(res.detailedExplanation).not.toMatch(/\bholding\s+\./);
+          expect(res.detailedExplanation).not.toContain("  ");
+          expect(res.shortComment.length).toBeGreaterThan(5);
+          if (badge === "Excellent" && coachFor === "White") {
+            expect(res.detailedExplanation).toBe(
+              "A solid excellent continuation. Lovely intuition keeping your army active and working together!"
+            );
+          }
+          if (badge === "Good" && coachFor === "Black") {
+            expect(res.detailedExplanation).toBe("Your opponent's move keeps the position solid.");
+          }
+        }
+      }
+    }
+
+    const afterOnly = await coach.explainMove({
+      moveSan: "Qb3",
+      playedBy: "White",
+      badge: "Great",
+      evalBefore: "",
+      evalAfter: "+2.4",
+      deltaWP: 18,
+      engineBestMove: "Qb3",
+      moveNumber: 1,
+      bestMovePV: ["Qb3", null, "Qxb3", "axb3", "Nc6", "extraMove"] as unknown as string[],
+      refutationPV: ["Qxb3", "axb3"],
+      tacticalContext: makeContext(),
+    });
+    expect(afterOnly.detailedExplanation).toContain("holding the edge (+2.4).");
+    expect(afterOnly.shortComment.length).toBeGreaterThan(5);
+    const bestPvTruncated = await coach.explainMove({
+      moveSan: "Nf3",
+      playedBy: "White",
+      badge: "Best",
+      evalBefore: "",
+      evalAfter: "+0.8",
+      deltaWP: 0,
+      engineBestMove: "Nf3",
+      moveNumber: 1,
+      bestMovePV: ["Nf3", null, "Nc6", "d4", "d5", "extraMove"] as unknown as string[],
+      tacticalContext: makeContext(),
+    });
+    expect(bestPvTruncated.detailedExplanation).toContain(
+      "(1. Nf3 Nc6 2. d4 d5), keeping initiative at +0.8."
+    );
+    expect(bestPvTruncated.detailedExplanation).not.toContain("extraMove");
+
+    const zeroMovePv = await coach.explainMove({
+      moveSan: "a4",
+      playedBy: "Black",
+      badge: "Mistake",
+      evalBefore: "+0.1",
+      evalAfter: "+1.5",
+      deltaWP: 14,
+      engineBestMove: "Nf6",
+      moveNumber: 0 as unknown as number,
+      bestMovePV: ["Nf6", "d4", "d5"],
+      tacticalContext: makeContext(),
+    });
+    expect(zeroMovePv.detailedExplanation).toContain("The evaluation shifted from +0.1 to +1.5.");
+    expect(zeroMovePv.bestMoveReasoning).toContain("Nf6 d4 d5");
+    expect(zeroMovePv.bestMoveReasoning).not.toContain("0.");
+
+    const inaccShift = await coach.explainMove({
+      moveSan: "a3",
+      playedBy: "White",
+      badge: "Inaccuracy",
+      evalBefore: "+0.1",
+      evalAfter: "-0.6",
+      deltaWP: 7,
+      engineBestMove: "Nf3",
+      moveNumber: 4,
+      bestMovePV: ["Nf3"],
+      tacticalContext: makeContext(),
+    });
+    expect(inaccShift.detailedExplanation).toContain("trims your edge (+0.1 to -0.6).");
+
+    const emptyThreatRes = await coach.explainMove({
+      moveSan: "h3",
+      playedBy: "White",
+      badge: "Mistake",
+      evalBefore: "+0.5",
+      evalAfter: "-0.8",
+      deltaWP: 10,
+      engineBestMove: "d4",
+      moveNumber: 5,
+      bestMovePV: ["d4", ""],
+      tacticalContext: makeContext({
+        tags: ["MISSED_FORK"],
+        missedTactic: { kind: "FORK", missedMoveSan: "   ", targetSummary: "  " },
+      }),
+    });
+    expect(emptyThreatRes.detailedExplanation).toContain("You missed a fork, forking two valuable pieces.");
+
+    const emptyOppFork = await coach.explainMove({
+      moveSan: "h3",
+      playedBy: "White",
+      badge: "Mistake",
+      evalBefore: "+0.5",
+      evalAfter: "-1.8",
+      deltaWP: 18,
+      engineBestMove: "d4",
+      moveNumber: 5,
+      bestMovePV: ["d4"],
+      tacticalContext: makeContext({
+        tags: ["ALLOWS_FORK"],
+        allowedThreat: { kind: "FORK", refutationMoveSan: "  ", targetSummary: "  " },
+      }),
+    });
+    expect(emptyOppFork.detailedExplanation).toContain("This allows a fork, forking two valuable pieces.");
+
+    const emptyCapture = await coach.explainMove({
+      moveSan: "h3",
+      playedBy: "White",
+      coachFor: "Black",
+      opponentName: "  ",
+      badge: "Blunder",
+      evalBefore: "+0.0",
+      evalAfter: "-3.1",
+      deltaWP: 30,
+      engineBestMove: "d4",
+      moveNumber: 5,
+      bestMovePV: ["d4"],
+      tacticalContext: makeContext({
+        tags: ["ALLOWS_MATE"],
+        allowedThreat: { kind: "CHECKMATE", refutationMoveSan: "  ", targetSummary: "  " },
+      }),
+    });
+    expect(emptyCapture.detailedExplanation).toContain("Your opponent allows you to deliver checkmate (checkmate).");
+
+    const beforeOnly = await coach.explainMove({
+      moveSan: "h3",
+      playedBy: "White",
+      badge: "Mistake",
+      evalBefore: "+1.2",
+      evalAfter: "",
+      deltaWP: 11,
+      engineBestMove: "d4",
+      moveNumber: 12,
+      bestMovePV: ["d4"],
+      tacticalContext: makeContext(),
+    });
+    expect(beforeOnly.detailedExplanation).toContain("The evaluation shifted from +1.2.");
+    expect(beforeOnly.detailedExplanation).not.toMatch(/undefined/i);
+
+    const mateNoEval = await coach.explainMove({
+      moveSan: "g4",
+      playedBy: "White",
+      badge: "Blunder",
+      evalBefore: "",
+      evalAfter: "",
+      deltaWP: 50,
+      engineBestMove: "Nf3",
+      moveNumber: 2,
+      bestMovePV: ["Nf3"],
+      tacticalContext: makeContext({
+        tags: ["ALLOWS_MATE"],
+        allowedThreat: { kind: "CHECKMATE", refutationMoveSan: "Qh4#" },
+      }),
+    });
+    expect(mateNoEval.detailedExplanation).toBe(
+      "This move concedes decisive momentum. This allows your opponent to deliver checkmate with Qh4#. Take a breath—spot the tactical clue here and carry that scan into next turn."
+    );
+
+    mockGenerateContent.mockReset();
+    const onlineCoach = new GeminiCoachService("fake-test-key");
+    mockGenerateContent
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          badge: "Inaccuracy",
+          shortComment: "Nf3 develops smoothly.",
+          detailedExplanation: "This move drops slight initiative.",
+          bestMoveReasoning: "Developing a piece is preferable.",
+          coachingTip: "Control the center before flank thrusts.",
+        }),
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          badge: "Mistake",
+          shortComment: "Nf3 keeps control.",
+          detailedExplanation: "This move misses an active knight development.",
+          bestMoveReasoning: "Nf3 fights for e5 and prepares kingside castling.",
+          coachingTip: "Develop knights before pushing rim pawns.",
+        }),
+      });
+
+    await onlineCoach.explainMove({
+      moveSan: "h3",
+      playedBy: "White",
+      coachFor: "Black",
+      opponentName: "   ",
+      badge: "Inaccuracy",
+      deltaWP: 6,
+      moveNumber: 1.5,
+      bestMovePV: [null, "  "],
+      tacticalContext: makeContext(),
+    } as never);
+
+    await onlineCoach.explainMove({
+      moveSan: "h3",
+      playedBy: "White",
+      coachFor: "White",
+      opponentName: " Magnusson ",
+      badge: "Mistake",
+      evalBefore: " +0.4 ",
+      evalAfter: " -1.2 ",
+      deltaWP: 14,
+      moveNumber: 1,
+      bestMovePV: [" Nf3 ", null, " e5 ", "Qh4+", "Bb5", "a6"] as unknown as string[],
+      refutationPV: ["  ", "Bg4"],
+      tacticalContext: makeContext(),
+    });
+
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    const sentPrompt = String(
+      mockGenerateContent.mock.calls[0]?.[0]?.contents?.[0]?.parts?.[0]?.text ?? ""
+    );
+    expect(sentPrompt).not.toMatch(/\bundefined\b/);
+    expect(sentPrompt).not.toContain("Mover's Engine Best Move:");
+    expect(sentPrompt).not.toContain("Mover's Best PV Line:");
+    expect(sentPrompt).toContain('Refer to White (Your opponent) strictly in the 3rd person');
+    expect(sentPrompt).toContain("This move was played by YOUR OPPONENT (White, Your opponent).");
+    expect(sentPrompt).toContain("Move: h3 (Move ? played by White [OPPONENT: Your opponent])");
+    expect(sentPrompt).toContain("Evaluation Before: N/A -> Evaluation After: N/A");
+    expect(sentPrompt).toContain("why the best continuation is better");
+
+    const sentPrompt2 = String(
+      mockGenerateContent.mock.calls[1]?.[0]?.contents?.[0]?.parts?.[0]?.text ?? ""
+    );
+    expect(sentPrompt2).toContain("Move: h3 (Move 1 played by White [YOU])");
+    expect(sentPrompt2).toContain('Refer to Black (Magnusson) strictly in the 3rd person');
+    expect(sentPrompt2).toContain("Evaluation Before: +0.4 -> Evaluation After: -1.2");
+    expect(sentPrompt2).toContain("- Mover's Engine Best Move: Nf3");
+    expect(sentPrompt2).toContain("- Mover's Best PV Line: Nf3 e5 Qh4+ Bb5");
+    expect(sentPrompt2).not.toContain("a6");
+    expect(sentPrompt2).toContain("- Next Reply / Punishment Line (Magnusson): Bg4");
+  });
 });
