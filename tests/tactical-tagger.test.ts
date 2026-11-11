@@ -298,4 +298,137 @@ describe("tactical-tagger (deterministic board feature detector)", () => {
     const checkmateMove = playAndExtract("6k1/5Q2/6K1/8/8/8/8/8 w - - 0 40", "Qg7#", 40);
     expect(checkmateMove.tags).not.toContain("CHECKMATE_THREAT");
   });
+
+  it("P0: prioritizes refutation-first HANGING_PIECE and detects ALLOWS_MATE / ALLOWS_FORK / MISSED_* tactics", () => {
+    // 1a. Refutation-first hanging piece: G09 12... Nxd4 hangs BOTH Bb4 and Nd4 (SEE=3),
+    // and refutation 13. Rxd4 captures d4 -> must report Knight on d4 (not Bishop on b4).
+    const g09Before = "r1bq1rk1/pp3p2/2n1pn1p/1Q1p2p1/1b1P4/2NR2B1/PPP1BPPP/4K1NR b K - 1 12";
+    const g09After = "r1bq1rk1/pp3p2/4pn1p/1Q1p2p1/1b1n4/2NR2B1/PPP1BPPP/4K1NR w K - 0 13";
+    const g09Ref = extractTacticalContext(g09Before, g09After, "Nxd4", 12, {
+      refutationPvSan: ["Rxd4", "Bxc3+"],
+      bestMoveSan: "Be7",
+      badge: "Blunder",
+    });
+    expect(g09Ref.tags).toContain("HANGING_PIECE");
+    expect(g09Ref.hangingPieceDetails?.square).toBe("d4");
+    expect(g09Ref.hangingPieceDetails?.piece).toBe("Knight");
+
+    // Non-capture refutation falls back cleanly to highest-value hanging piece (Bishop on b4 or Knight on d4)
+    const g09NonCap = extractTacticalContext(g09Before, g09After, "Nxd4", 12, {
+      refutationPvSan: ["Bf4"],
+      bestMoveSan: "Be7",
+      badge: "Blunder",
+    });
+    expect(g09NonCap.tags).toContain("HANGING_PIECE");
+    expect(g09NonCap.hangingPieceDetails?.value).toBe(3);
+
+    // 1b. G10 7. Nc3 hangs both c5 and g2 pawns; refutation 7... Bxg2 captures g2 -> Pawn on g2
+    const g10Before = "rn1qkbnr/p2pppp1/1p6/2P3Bp/B3b3/8/PPP2PPP/RN1QK1NR w KQkq - 0 7";
+    const g10After = "rn1qkbnr/p2pppp1/1p6/2P3Bp/B3b3/2N5/PPP2PPP/R2QK1NR b KQkq - 1 7";
+    const g10Ref = extractTacticalContext(g10Before, g10After, "Nc3", 7, {
+      refutationPvSan: ["Bxg2", "Qg4"],
+      bestMoveSan: "Be3",
+      badge: "Blunder",
+    });
+    expect(g10Ref.hangingPieceDetails?.square).toBe("g2");
+    expect(g10Ref.hangingPieceDetails?.piece).toBe("Pawn");
+
+    // 1c. En passant refutation capture: d5 captured via exd6 e.p. (with c7 absent so d6 is undefended)
+    const epBefore = "rnbqkbnr/pp2pppp/8/4P3/8/8/PPPP1PPP/RNBQKB1R b KQkq - 0 2";
+    const epAfter = "rnbqkbnr/pp2pppp/8/3pP3/8/8/PPPP1PPP/RNBQKB1R w KQkq d6 0 3";
+    const epCtx = extractTacticalContext(epBefore, epAfter, "d5", 2, {
+      refutationPvSan: ["exd6"],
+      bestMoveSan: "e6",
+      badge: "Inaccuracy",
+    });
+    expect(epCtx.tags).toContain("HANGING_PIECE");
+    expect(epCtx.hangingPieceDetails?.square).toBe("d5");
+    expect(epCtx.hangingPieceDetails?.piece).toBe("Pawn");
+
+    // 2. ALLOWS_FORK: G10 10... e6 allows 11. Nc7+ forking King on e8 and Rook on a8
+    const g10ForkBefore = "r2qkbnr/p2pppp1/1p6/1BnN3p/5B2/8/PPP2PbP/R2QK1NR b KQkq - 1 10";
+    const g10ForkAfter = "r2qkbnr/p2p1pp1/1p2p3/1BnN3p/5B2/8/PPP2PbP/R2QK1NR w KQkq - 0 11";
+    const g10Fork = extractTacticalContext(g10ForkBefore, g10ForkAfter, "e6", 10, {
+      refutationPvSan: ["Nc7+", "Qxc7"],
+      bestMoveSan: "Na6",
+      badge: "Blunder",
+    });
+    expect(g10Fork.tags).toContain("ALLOWS_FORK");
+    expect(g10Fork.allowedThreat?.kind).toBe("FORK");
+    expect(g10Fork.allowedThreat?.refutationMoveSan).toBe("Nc7+");
+    expect(g10Fork.allowedThreat?.targetSquares).toEqual(expect.arrayContaining(["e8", "a8"]));
+
+    // 3. ALLOWS_MATE: G06 30. a4 allows 30... Re1#
+    const mateBefore = "4r1k1/5ppp/8/8/8/8/P4PPP/6K1 w - - 0 30";
+    const mateAfter = "4r1k1/5ppp/8/8/P7/8/5PPP/6K1 b - - 0 30";
+    const allowsMate = extractTacticalContext(mateBefore, mateAfter, "a4", 30, {
+      refutationPvSan: ["Re1#"],
+      bestMoveSan: "Kf1",
+      badge: "Blunder",
+    });
+    expect(allowsMate.tags).toContain("ALLOWS_MATE");
+    expect(allowsMate.allowedThreat?.kind).toBe("CHECKMATE");
+    expect(allowsMate.allowedThreat?.refutationMoveSan).toBe("Re1#");
+
+    // 4. MISSED_FORK: G03 8. a3 missed 8. Qa4+ forking King on e8 and Bishop on b4
+    const missForkBefore = "r1bqk1nr/ppp2ppp/3p4/4p3/1b2P3/3P1N2/P3KPPP/RNBQ1B1R w kq - 0 8";
+    const missForkAfter = "r1bqk1nr/ppp2ppp/3p4/4p3/1b2P3/P2P1N2/4KPPP/RNBQ1B1R b kq - 0 8";
+    const missFork = extractTacticalContext(missForkBefore, missForkAfter, "a3", 8, {
+      bestMoveSan: "Qa4+",
+      refutationPvSan: ["Nc6", "Qxb4"],
+      badge: "Blunder",
+    });
+    expect(missFork.tags).toContain("MISSED_FORK");
+    expect(missFork.missedTactic?.kind).toBe("FORK");
+    expect(missFork.missedTactic?.missedMoveSan).toBe("Qa4+");
+    expect(missFork.missedTactic?.targetSquares).toEqual(expect.arrayContaining(["e8", "b4"]));
+
+    // 5. MISSED_MATE: G08 59. Qb6 stalemate/blunder missing 59. Qa1#
+    const missMateBefore = "k7/2K5/8/8/8/8/8/1Q6 w - - 0 59";
+    const missMateAfter = "k7/2K5/1Q6/8/8/8/8/8 b - - 1 59";
+    const missMate = extractTacticalContext(missMateBefore, missMateAfter, "Qb6", 59, {
+      bestMoveSan: "Qa1#",
+      badge: "Blunder",
+    });
+    expect(missMate.tags).toContain("MISSED_MATE");
+    expect(missMate.missedTactic?.kind).toBe("CHECKMATE");
+    expect(missMate.missedTactic?.missedMoveSan).toBe("Qa1#");
+
+    // 6. MISSED_CAPTURE: G03 31. Rb6 missing 31. Rxa8 (free Rook), and G11 9... O-O missing 9... Qxd4
+    const missCapBefore = "r5k1/5ppp/R7/8/8/8/5PPP/6K1 w - - 0 31";
+    const missCapAfter = "r5k1/5ppp/1R6/8/8/8/5PPP/6K1 b - - 1 31";
+    const missCap = extractTacticalContext(missCapBefore, missCapAfter, "Rb6", 31, {
+      bestMoveSan: "Rxa8",
+      badge: "Blunder",
+    });
+    expect(missCap.tags).toContain("MISSED_CAPTURE");
+    expect(missCap.missedTactic?.kind).toBe("FREE_CAPTURE");
+    expect(missCap.missedTactic?.missedMoveSan).toBe("Rxa8");
+
+    const g11Before = "rnbqk2r/pp3ppp/1bp2n2/4N3/1PBPp3/P1N5/2P2PPP/R1BQK2R b KQkq - 1 9";
+    const g11After = "rnbq1rk1/pp3ppp/1bp2n2/4N3/1PBPp3/P1N5/2P2PPP/R1BQK2R w KQ - 2 10";
+    const g11Miss = extractTacticalContext(g11Before, g11After, "O-O", 9, {
+      bestMoveSan: "Qxd4",
+      badge: "Blunder",
+    });
+    expect(g11Miss.missedTactic).toBeDefined();
+    expect(g11Miss.tags.some((t) => t === "MISSED_CAPTURE" || t === "MISSED_FORK")).toBe(true);
+
+    // 7. Guards: Equal trade (SEE === 0) or non-error "Best" badge must NOT emit ALLOWS_* or MISSED_*
+    const eqTradeBefore = "3rk3/8/8/8/3r4/8/8/3R2K1 w - - 0 25";
+    const eqTradeAfter = "3rk3/8/8/8/3r4/8/8/3R3K b - - 1 25";
+    const eqTrade = extractTacticalContext(eqTradeBefore, eqTradeAfter, "Kh1", 25, {
+      bestMoveSan: "Rxd4",
+      badge: "Inaccuracy",
+    });
+    expect(eqTrade.tags).not.toContain("MISSED_CAPTURE");
+
+    const bestGuard = extractTacticalContext(missForkBefore, missForkAfter, "a3", 8, {
+      bestMoveSan: "Qa4+",
+      refutationPvSan: ["Re1#"],
+      badge: "Best",
+    });
+    expect(bestGuard.tags).not.toContain("MISSED_FORK");
+    expect(bestGuard.tags).not.toContain("ALLOWS_MATE");
+  });
 });
