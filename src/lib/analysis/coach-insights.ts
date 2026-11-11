@@ -471,6 +471,17 @@ export function analyzeComparativeReasons(
     playedTactics,
   } = params;
 
+  if (!safeLoadChess(fenBefore) || !safeLoadChess(fenAfter)) {
+    return {
+      playedSan,
+      bestMoveSan,
+      whyBetterFacts: [],
+      strategicTradeoffs: [],
+      missedOpportunities: [],
+      boardPieceMapAfter: "",
+    };
+  }
+
   const boardPieceMapAfter = summarizePiecePlacements(fenAfter);
   const playedResult = safeApplySan(fenBefore, playedSan);
   const bestResult = safeApplySan(fenBefore, bestMoveSan);

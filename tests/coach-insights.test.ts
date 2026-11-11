@@ -194,5 +194,298 @@ describe("coach-insights", () => {
         insights.whyBetterFacts.some((w) => /Qh4#/.test(w) || /checkmate/i.test(w))
       ).toBe(true);
     });
+
+    it("detects missed forks, skewers, discovered attacks, checkmate threats, and winning exchanges", () => {
+      // 1) Missed fork + winning exchange capture: White Knight on b5 can play Nxc7+ forking King e8 & Rook a8 (c7 undefended)
+      const forkChess = new Chess("r3k3/ppp2ppp/8/1N6/8/8/PPPPPPPP/R2QK2R w KQ - 0 12");
+      const forkBefore = forkChess.fen();
+      forkChess.move("a3");
+      const forkInsights = analyzeComparativeReasons({
+        fenBefore: forkBefore,
+        fenAfter: forkChess.fen(),
+        playedSan: "a3",
+        bestMoveSan: "Nxc7+",
+        moveNumber: 12,
+      });
+      expect(forkInsights.missedOpportunities.some((m) => /fork/i.test(m) && /Nxc7\+/.test(m))).toBe(true);
+
+      // Winning exchange: Knight captures Queen on d5 defended by Black pawn on e6
+      const exchChess = new Chess("4k3/8/4p3/3q4/8/2N5/8/4K3 w - - 0 15");
+      const exchBefore = exchChess.fen();
+      exchChess.move("Kf1");
+      const exchInsights = analyzeComparativeReasons({
+        fenBefore: exchBefore,
+        fenAfter: exchChess.fen(),
+        playedSan: "Kf1",
+        bestMoveSan: "Nxd5",
+        moveNumber: 15,
+      });
+      expect(
+        exchInsights.missedOpportunities.some((m) => /Nxd5/.test(m) && /Queen on d5/.test(m))
+      ).toBe(true);
+
+      // 2) Missed skewer: Rook Re1+ skewers King e5 to Queen e8
+      const skChess = new Chess("4q3/8/8/4k3/8/8/8/4R1K1 w - - 0 25");
+      const skBefore = skChess.fen();
+      skChess.move("Kf1");
+      const skInsights = analyzeComparativeReasons({
+        fenBefore: skBefore,
+        fenAfter: skChess.fen(),
+        playedSan: "Kf1",
+        bestMoveSan: "Re1+",
+        bestMovePvSan: ["Re1+"],
+        moveNumber: 25,
+      });
+      // King on e5 -> wait R is already on e1, check Ra1 -> Re1+!
+      expect(skInsights).toBeDefined();
+
+      const sk2Chess = new Chess("4q3/8/8/4k3/8/8/8/R5K1 w - - 0 25");
+      const sk2Before = sk2Chess.fen();
+      sk2Chess.move("Kf1");
+      const sk2Insights = analyzeComparativeReasons({
+        fenBefore: sk2Before,
+        fenAfter: sk2Chess.fen(),
+        playedSan: "Kf1",
+        bestMoveSan: "Re1+",
+        moveNumber: 25,
+      });
+      expect(
+        sk2Insights.missedOpportunities.some((m) => /Re1\+/.test(m) && /skewer/i.test(m))
+      ).toBe(true);
+
+      // 3) Missed discovered attack: Rook on d1, White Knight on d4 moves to Nf5 uncovering Queen on d8
+      const discChess = new Chess("3q2k1/8/8/8/3N4/8/8/3R2K1 w - - 0 20");
+      const discBefore = discChess.fen();
+      discChess.move("Kf1");
+      const discInsights = analyzeComparativeReasons({
+        fenBefore: discBefore,
+        fenAfter: discChess.fen(),
+        playedSan: "Kf1",
+        bestMoveSan: "Nf5",
+        moveNumber: 20,
+      });
+      expect(
+        discInsights.missedOpportunities.some((m) => /Nf5/.test(m) && /discovered attack/i.test(m))
+      ).toBe(true);
+    });
+
+    it("detects open-file rook activation, center control, lost castling rights, passive retreat, and hanging own pieces", () => {
+      // Open-file rook Rd1 & losing castling rights via Kf1 vs O-O
+      const rookChess = new Chess("4k3/ppp2ppp/8/8/8/8/PPP2PPP/R3K2R w KQ - 0 14");
+      const rookBefore = rookChess.fen();
+      rookChess.move("Kf1");
+      const rookInsights = analyzeComparativeReasons({
+        fenBefore: rookBefore,
+        fenAfter: rookChess.fen(),
+        playedSan: "Kf1",
+        bestMoveSan: "Rd1",
+        moveNumber: 14,
+      });
+      expect(rookInsights.strategicTradeoffs.some((s) => /open or semi-open file/i.test(s))).toBe(true);
+      expect(rookInsights.strategicTradeoffs.some((s) => /castling rights/i.test(s))).toBe(true);
+
+      // Best is castling (O-O) while played Kf1 -> shelves king & connects rooks
+      const castleInsights = analyzeComparativeReasons({
+        fenBefore: rookBefore,
+        fenAfter: rookChess.fen(),
+        playedSan: "Kf1",
+        bestMoveSan: "O-O",
+        moveNumber: 14,
+      });
+      expect(castleInsights.strategicTradeoffs.some((s) => /shelters the king/i.test(s))).toBe(true);
+
+      // Center control + leaving own piece hanging + passive retreat (Black side test!)
+      const blackChess = new Chess("rnbqkbnr/pppppppp/8/8/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 1");
+      const bBefore = blackChess.fen();
+      blackChess.move("Nh6"); // move vs d5 center control
+      const cInsights = analyzeComparativeReasons({
+        fenBefore: bBefore,
+        fenAfter: blackChess.fen(),
+        playedSan: "Nh6",
+        bestMoveSan: "d5",
+        moveNumber: 1,
+      });
+      expect(cInsights.strategicTradeoffs.some((s) => /central control/i.test(s))).toBe(true);
+
+      // Active forward move vs passive retreat + hanging own piece
+      const retreatChess = new Chess("4k3/8/8/4r3/3B4/8/8/6K1 w - - 0 20");
+      const rBefore = retreatChess.fen();
+      retreatChess.move("Bc3"); // passive retreat backward while Bc5 steps forward
+      const retreatInsights = analyzeComparativeReasons({
+        fenBefore: rBefore,
+        fenAfter: retreatChess.fen(),
+        playedSan: "Bc3",
+        bestMoveSan: "Bc5",
+        moveNumber: 20,
+      });
+      expect(
+        retreatInsights.strategicTradeoffs.some((s) => /retreating passively/i.test(s))
+      ).toBe(true);
+
+      // Leaving own Queen vulnerable on c4 where Black d5 pawn? Let's hang Queen on e5 attacked by Black d6? Wait: Knight on d7 covers e5!
+      const hangChess = new Chess("4k3/3n4/8/8/8/8/4Q3/R3K2R w KQ - 0 18");
+      const hBefore = hangChess.fen();
+      hangChess.move("Qe5"); // undefended Queen on e5 attacked by Knight on d7!
+      const hInsights = analyzeComparativeReasons({
+        fenBefore: hBefore,
+        fenAfter: hangChess.fen(),
+        playedSan: "Qe5",
+        bestMoveSan: "O-O",
+        moveNumber: 18,
+      });
+      expect(hInsights.strategicTradeoffs.some((s) => /vulnerable/i.test(s))).toBe(true);
+    });
+
+    it("handles book/best-move fast paths, playedPvSan, post-bestMove PV fallback, and invalid inputs cleanly", () => {
+      expect(tracePvIntentions("bad-fen", ["e4"])).toEqual({
+        lineSan: [],
+        checksDelivered: 0,
+        capturedTargets: [],
+        castled: false,
+        promoted: false,
+        terminalCheckmate: false,
+        summaryFacts: [],
+      });
+      expect(tracePvIntentions(new Chess().fen(), [])).toEqual({
+        lineSan: [],
+        checksDelivered: 0,
+        capturedTargets: [],
+        castled: false,
+        promoted: false,
+        terminalCheckmate: false,
+        summaryFacts: [],
+      });
+      expect(summarizePiecePlacements("invalid-fen")).toBe("");
+      const startMap = summarizePiecePlacements(new Chess().fen());
+      expect(startMap).toContain("White: K e1, Q d1, R a1/h1, B c1/f1, N b1/g1, Pawns a2/b2/c2/d2/e2/f2/g2/h2");
+      expect(startMap).toContain("Black: K e8, Q d8, R a8/h8, B c8/f8, N b8/g8, Pawns a7/b7/c7/d7/e7/f7/g7/h7");
+
+      const chess = new Chess();
+      const fenBefore = chess.fen();
+      chess.move("e4");
+      const fenAfter = chess.fen();
+
+      // Book move fast path preserves playedPvSan and bestMovePV without false tactical complaints
+      const bookInsights = analyzeComparativeReasons({
+        fenBefore,
+        fenAfter,
+        playedSan: "e4",
+        bestMoveSan: "d4",
+        bestMovePvSan: ["d4", "d5", "c4"],
+        playedPvSan: ["e5", "Nf3"],
+        moveNumber: 1,
+        isBook: true,
+      });
+      expect(bookInsights.strategicTradeoffs).toEqual([]);
+      expect(bookInsights.missedOpportunities).toEqual([]);
+      expect(bookInsights.playedPvIntentions?.lineSan).toEqual(["e5", "Nf3"]);
+
+      // Post-bestMove PV fallback (when bestMovePvSan starts AFTER bestMoveSan, e.g. continuation after "e4")
+      const postPvInsights = analyzeComparativeReasons({
+        fenBefore,
+        fenAfter,
+        playedSan: "d3",
+        bestMoveSan: "e4",
+        bestMovePvSan: ["e5", "Nf3"],
+        moveNumber: 1,
+      });
+      expect(postPvInsights.bestPvIntentions?.lineSan).toEqual(["e5", "Nf3"]);
+    });
+
+    it("detects checkmate threats, trapped pieces, isolated pawn creation, closed-file rooks, quiet PVs, and invalid move strings", () => {
+      // 1) Quiet non-check/non-capture/non-castle PV sets all flags to false & summaryFacts empty
+      const quietChess = new Chess();
+      const quietPv = tracePvIntentions(quietChess.fen(), ["d3", "d6"]);
+      expect(quietPv.checksDelivered).toBe(0);
+      expect(quietPv.capturedTargets).toEqual([]);
+      expect(quietPv.castled).toBe(false);
+      expect(quietPv.promoted).toBe(false);
+      expect(quietPv.terminalCheckmate).toBe(false);
+      expect(quietPv.summaryFacts).toEqual([]);
+
+      // 2) Checkmate threat: Qh5 in 1.e4 e5 2.Bc4 Nc6 threatens Qxf7# while a3 doesn't
+      const mateThreatChess = new Chess("r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/8/PPPP1PPP/RNBQK1NR w KQkq - 2 3");
+      const mBefore = mateThreatChess.fen();
+      mateThreatChess.move("a3");
+      const mateThreatInsights = analyzeComparativeReasons({
+        fenBefore: mBefore,
+        fenAfter: mateThreatChess.fen(),
+        playedSan: "a3",
+        bestMoveSan: "Qh5",
+        moveNumber: 3,
+      });
+      expect(
+        mateThreatInsights.missedOpportunities.some((m) => /Qh5/.test(m) && /checkmate threat/i.test(m))
+      ).toBe(true);
+
+      // 3) Trapped piece: 20. b4 traps Black's Bishop on a5 (b6 & c7 pawns block retreat, a3 & c3 defend b4)
+      const trapChess = new Chess("4k3/2p5/1p6/b7/8/P1P5/1P6/4K3 w - - 0 20");
+      const tBefore = trapChess.fen();
+      trapChess.move("Kf1");
+      const trapInsights = analyzeComparativeReasons({
+        fenBefore: tBefore,
+        fenAfter: trapChess.fen(),
+        playedSan: "Kf1",
+        bestMoveSan: "b4",
+        moveNumber: 20,
+      });
+      expect(
+        trapInsights.missedOpportunities.some((m) => /b4/.test(m) && /traps/i.test(m))
+      ).toBe(true);
+
+      // 4) Pure isolated pawn creation without doubling: bxc3 leaves a2 isolated while Qxc3 avoids it
+      const isoChess = new Chess("4k3/8/8/8/8/2n5/PP1Q4/4K3 w - - 0 18");
+      const isoBefore = isoChess.fen();
+      isoChess.move("bxc3");
+      const isoInsights = analyzeComparativeReasons({
+        fenBefore: isoBefore,
+        fenAfter: isoChess.fen(),
+        playedSan: "bxc3",
+        bestMoveSan: "Qxc3",
+        moveNumber: 18,
+      });
+      expect(
+        isoInsights.strategicTradeoffs.some((s) => /pawn structure/i.test(s))
+      ).toBe(true);
+
+      // 5) Closed file rook activation (d2 pawn present) must NOT claim open file
+      const closedFileChess = new Chess("4k3/8/8/8/8/8/PPPPP3/R3K3 w - - 0 15");
+      const cfBefore = closedFileChess.fen();
+      closedFileChess.move("Kf1");
+      const cfInsights = analyzeComparativeReasons({
+        fenBefore: cfBefore,
+        fenAfter: closedFileChess.fen(),
+        playedSan: "Kf1",
+        bestMoveSan: "Rd1",
+        moveNumber: 15,
+      });
+      expect(cfInsights.strategicTradeoffs.some((s) => /open or semi-open file/i.test(s))).toBe(false);
+
+      // 6) Same-move equal bestMoveSan with checkmate PV preserves whyBetterFacts from bestPvIntentions; invalid FEN handles safely
+      const bestPvChess = new Chess("5rk1/5ppp/8/8/8/8/5Q2/6K1 w - - 0 1");
+      const bpBefore = bestPvChess.fen();
+      bestPvChess.move("Qxf7+");
+      const equalInsights = analyzeComparativeReasons({
+        fenBefore: bpBefore,
+        fenAfter: bestPvChess.fen(),
+        playedSan: "Qxf7+",
+        bestMoveSan: "Qxf7+",
+        bestMovePvSan: ["Qxf7+", "Kh8", "Qxf8#"],
+        moveNumber: 1,
+      });
+      expect(equalInsights.whyBetterFacts.some((w) => /checkmate/i.test(w))).toBe(true);
+      expect(equalInsights.strategicTradeoffs).toEqual([]);
+      expect(equalInsights.missedOpportunities).toEqual([]);
+
+      const badFenInsights = analyzeComparativeReasons({
+        fenBefore: "bad-fen",
+        fenAfter: "bad-fen",
+        playedSan: "e4",
+        bestMoveSan: "d4",
+        moveNumber: 1,
+      });
+      expect(badFenInsights.whyBetterFacts).toEqual([]);
+      expect(badFenInsights.missedOpportunities).toEqual([]);
+    });
   });
 });
