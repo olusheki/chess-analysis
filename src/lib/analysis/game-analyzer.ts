@@ -331,17 +331,25 @@ export async function analyzeGame(
     const capturedPiece = chessBefore.get(move.to);
     const capturedVal = capturedPiece ? PIECE_VALUES[capturedPiece.type] : 0;
     const replyGainOnDest =
-      capturedVal >= 3
+      capturedVal >= 1
         ? staticExchangeOnSquare(
             new Chess(move.fenAfter),
             move.to,
             move.color === "w" ? "b" : "w"
           )
         : 0;
+    const isBlunderedSquareCapture =
+      Boolean(prevMove) &&
+      prevMove!.to === move.to &&
+      (prevDeltaWP ?? 0) >= 15.0 &&
+      capturedVal >= (movedPiece ? PIECE_VALUES[movedPiece.type] : 0);
     const isObviousFreeCapture =
-      capturedVal >= 5
+      isBlunderedSquareCapture ||
+      (capturedVal >= 5
         ? capturedVal - replyGainOnDest >= 4
-        : capturedVal >= 3 && replyGainOnDest === 0 && (prevDeltaWP ?? 0) >= 12.0;
+        : capturedVal >= 3
+        ? replyGainOnDest === 0 && (prevDeltaWP ?? 0) >= 12.0
+        : capturedVal >= 1 && replyGainOnDest === 0 && (prevDeltaWP ?? 0) >= 25.0);
     const isKingCheckEscape = chessBefore.inCheck() && movedPiece?.type === "k";
 
     const classification = classifyMove({

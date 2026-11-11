@@ -238,6 +238,27 @@ const MUTANTS = [
     replacement: "const disasterFactor = 0;",
     testFile: "tests/win-probability.test.ts",
   },
+  {
+    name: "M32: Bypass isBlunderedSquareCapture Great filter in game-analyzer.ts",
+    file: "src/lib/analysis/game-analyzer.ts",
+    target: "const isBlunderedSquareCapture =",
+    replacement: "const isBlunderedSquareCapture = false &&",
+    testFile: "tests/game-analyzer.test.ts",
+  },
+  {
+    name: "M33: Bypass free-pawn-grab after major blunder Great filter in game-analyzer.ts",
+    file: "src/lib/analysis/game-analyzer.ts",
+    target: ": capturedVal >= 1 && replyGainOnDest === 0 && (prevDeltaWP ?? 0) >= 25.0);",
+    replacement: ": false);",
+    testFile: "tests/game-analyzer.test.ts",
+  },
+  {
+    name: "M34: Ignore SUPPLEMENTAL_OPENINGS sidelines in lookupRawOpening in opening-book.ts",
+    file: "src/lib/analysis/opening-book.ts",
+    target: "return ecoMap[key] ?? SUPPLEMENTAL_OPENINGS[key];",
+    replacement: "return ecoMap[key];",
+    testFile: "tests/opening-book.test.ts",
+  },
 ];
 
 let killed = 0;

@@ -132,4 +132,30 @@ describe("opening-book (ECO classifier & transposition matcher)", () => {
     expect(frenchTransposition.opening?.name).toContain("French");
     expect(frenchTransposition.outOfBookPly).toBe(5);
   });
+
+  it("P2: covers common Queen's Pawn, Goldsmith, Russian, and King's Pawn sidelines via lookup and search without breaking French transposition", () => {
+    const sidelines: [string[], string, string][] = [
+      [["d4", "d5", "Nf3", "e6", "Nc3"], "D02", "3. Nc3"],
+      [["d4", "d5", "Nc3", "e6", "Nf3"], "D02", "3. Nc3"],
+      [["d4", "d5", "Nc3", "e6", "e3"], "D00", "3. e3"],
+      [["e4", "h5", "Nf3"], "B00", "Goldsmith"],
+      [["e4", "h5", "d4", "d5"], "B00", "Goldsmith"],
+      [["e4", "h5", "d4", "Nf6"], "B00", "Goldsmith"],
+      [["e4", "h5", "d4", "g6"], "B00", "Goldsmith"],
+      [["e4", "e5", "Nc3", "Nf6", "Nf3", "d5"], "C42", "3. Nf3 d5"],
+      [["e4", "e5", "d3", "c5"], "C20", "2. d3 c5"],
+      [["e4", "e5", "Nf3", "Nc6", "d3", "Bb4+"], "C44", "3. d3 Bb4+"],
+    ];
+
+    for (const [moves, expectedEco, expectedSubstr] of sidelines) {
+      const res = classifyGameOpenings(moves);
+      expect(res.bookPlies).toBe(moves.length);
+      expect(res.outOfBookPly).toBeNull();
+      expect(res.opening?.eco).toBe(expectedEco);
+      expect(res.opening?.name).toContain(expectedSubstr);
+    }
+
+    const goldsmithResults = searchOpenings("Goldsmith", 20);
+    expect(goldsmithResults.some((m) => m.name.includes("2. d4 g6"))).toBe(true);
+  });
 });

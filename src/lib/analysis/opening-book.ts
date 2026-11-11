@@ -22,6 +22,53 @@ type CompactEcoEntry = [eco: string, name: string, moves: string];
 
 const ecoMap = ecoOpeningsRaw as unknown as Record<string, CompactEcoEntry>;
 
+const SUPPLEMENTAL_OPENINGS: Record<string, CompactEcoEntry> = {
+  "rnbqkbnr/ppp2ppp/4p3/3p4/3P4/2N2N2/PPP1PPPP/R1BQKB1R b KQkq -": [
+    "D02",
+    "Queen's Pawn Game: 2. Nf3 e6 3. Nc3",
+    "1. d4 d5 2. Nf3 e6 3. Nc3",
+  ],
+  "rnbqkbnr/ppp2ppp/4p3/3p4/3P4/2N1P3/PPP2PPP/R1BQKBNR b KQkq -": [
+    "D00",
+    "Queen's Pawn Game: 2. Nc3 e6 3. e3",
+    "1. d4 d5 2. Nc3 e6 3. e3",
+  ],
+  "rnbqkbnr/ppppppp1/8/7p/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq -": [
+    "B00",
+    "Goldsmith Defense: 2. Nf3",
+    "1. e4 h5 2. Nf3",
+  ],
+  "rnbqkbnr/ppp1ppp1/8/3p3p/3PP3/8/PPP2PPP/RNBQKBNR w KQkq -": [
+    "B00",
+    "Goldsmith Defense: 2. d4 d5",
+    "1. e4 h5 2. d4 d5",
+  ],
+  "rnbqkbnr/pppppp2/6p1/7p/3PP3/8/PPP2PPP/RNBQKBNR w KQkq -": [
+    "B00",
+    "Goldsmith Defense: 2. d4 g6",
+    "1. e4 h5 2. d4 g6",
+  ],
+  "rnbqkb1r/ppp2ppp/5n2/3pp3/4P3/2N2N2/PPPP1PPP/R1BQKB1R w KQkq -": [
+    "C42",
+    "Russian Game: 2. Nc3 Nf6 3. Nf3 d5",
+    "1. e4 e5 2. Nc3 Nf6 3. Nf3 d5",
+  ],
+  "rnbqkbnr/pp1p1ppp/8/2p1p3/4P3/3P4/PPP2PPP/RNBQKBNR w KQkq -": [
+    "C20",
+    "King's Pawn Game: 2. d3 c5",
+    "1. e4 e5 2. d3 c5",
+  ],
+  "r1bqk1nr/pppp1ppp/2n5/4p3/1b2P3/3P1N2/PPP2PPP/RNBQKB1R w KQkq -": [
+    "C44",
+    "King's Knight Opening: 3. d3 Bb4+",
+    "1. e4 e5 2. Nf3 Nc6 3. d3 Bb4+",
+  ],
+};
+
+function lookupRawOpening(key: string): CompactEcoEntry | undefined {
+  return ecoMap[key] ?? SUPPLEMENTAL_OPENINGS[key];
+}
+
 /**
  * Normalizes a FEN string to its position + turn + castling + en-passant key
  * so transpositions across different move orders resolve to the same entry.
@@ -36,14 +83,15 @@ export function normalizeFenKey(fen: string): string {
 export function lookupOpeningByFen(fen: string): OpeningMatch | null {
   const parts = fen.trim().split(/\s+/);
   const fenKey = parts.slice(0, 4).join(" ");
-  let entry = ecoMap[fenKey];
+  let entry = lookupRawOpening(fenKey);
   let matchedKey = fenKey;
 
   // Fallback for legacy FENs that include pseudo-en-passant square (e.g. e3 after 1.e4)
   if (!entry && parts.length >= 4 && parts[3] !== "-") {
     const noEpKey = `${parts[0]} ${parts[1]} ${parts[2]} -`;
-    if (ecoMap[noEpKey]) {
-      entry = ecoMap[noEpKey];
+    const fallbackEntry = lookupRawOpening(noEpKey);
+    if (fallbackEntry) {
+      entry = fallbackEntry;
       matchedKey = noEpKey;
     }
   }
@@ -198,11 +246,16 @@ export function searchOpenings(query: string, limit: number = 20): OpeningMatch[
   if (!q) return [];
 
   const matches: OpeningMatch[] = [];
-  for (const [fenKey, entry] of Object.entries(ecoMap)) {
-    const [eco, name, moves] = entry;
-    if (eco.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
-      matches.push({ eco, name, moves, fenKey });
-      if (matches.length >= limit) break;
+  for (const source of [ecoMap, SUPPLEMENTAL_OPENINGS]) {
+    for (const [fenKey, entry] of Object.entries(source)) {
+      const [eco, name, moves] = entry;
+      if (
+        (eco ?? "").toLowerCase().includes(q) ||
+        (name ?? "").toLowerCase().includes(q)
+      ) {
+        matches.push({ eco: eco ?? "", name, moves, fenKey });
+        if (matches.length >= limit) return matches;
+      }
     }
   }
   return matches;

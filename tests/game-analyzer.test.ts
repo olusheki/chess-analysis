@@ -532,4 +532,128 @@ describe("game-analyzer (full Tier 1 + Tier 2 pipeline)", () => {
       expect.arrayContaining(["e8", "h8"])
     );
   });
+
+  it("P2: suppresses Great on free pawn grabs after major blunders and captures onto newly blundered squares", async () => {
+    // Case A: 4. Nc3?? hangs g2 pawn (>= 25% WP blunder, with f1-bishop already moved to d3) -> 4... Bxg2 should be Best, not Great
+    const pawnGrabPgn = "1. d4 b6 2. e3 Bb7 3. Bd3 Nf6 4. Nc3 Bxg2 *";
+    const cA = new Chess();
+    const fensA: string[] = [cA.fen()];
+    for (const san of ["d4", "b6", "e3", "Bb7", "Bd3", "Nf6", "Nc3", "Bxg2"]) {
+      cA.move(san);
+      fensA.push(cA.fen());
+    }
+    const engineA: ChessEngine = {
+      async evaluatePosition(fen, depth) {
+        if (fen === fensA[6]) {
+          // Before 4. Nc3?? (ply idx 6): +100cp
+          return {
+            fen,
+            depth,
+            bestMoveUci: "g1f3",
+            bestMoveSan: "Nf3",
+            whiteCp: 100,
+            lines: [{ multipv: 1, cp: 100, pvUci: ["g1f3"], pvSan: ["Nf3"] }],
+          };
+        }
+        if (fen === fensA[7]) {
+          // Before 4... Bxg2 (ply idx 7): White dropped to -350cp; PV2 is 0
+          return {
+            fen,
+            depth,
+            bestMoveUci: "b7g2",
+            bestMoveSan: "Bxg2",
+            whiteCp: -350,
+            lines: [
+              { multipv: 1, cp: -350, pvUci: ["b7g2"], pvSan: ["Bxg2"] },
+              { multipv: 2, cp: 0, pvUci: ["e7e6"], pvSan: ["e6"] },
+            ],
+          };
+        }
+        if (fen === fensA[8]) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "d1f3",
+            bestMoveSan: "Qf3",
+            whiteCp: -350,
+            lines: [{ multipv: 1, cp: -350, pvUci: ["d1f3"], pvSan: ["Qf3"] }],
+          };
+        }
+        return {
+          fen,
+          depth,
+          bestMoveUci: "e7e6",
+          bestMoveSan: "e6",
+          whiteCp: 100,
+          lines: [{ multipv: 1, cp: 100, pvUci: ["e7e6"], pvSan: ["e6"] }],
+        };
+      },
+      dispose() {},
+    };
+    const resA = await analyzeGame(pawnGrabPgn, engineA, { depth: 12 });
+    const moveBxg2 = resA.moves[7];
+    expect(moveBxg2.san).toBe("Bxg2");
+    expect(moveBxg2.classification.badge).toBe("Best");
+
+    // Case B: 3... Qe6?? blunders onto e6 (defended by Bc8/f7 so SEE net < 4) -> 4. Qxe6 should be Best, not Great
+    const blunderSqPgn = "1. e4 d5 2. exd5 Qxd5 3. Qe2 Qe6 4. Qxe6 *";
+    const cB = new Chess();
+    const fensB: string[] = [cB.fen()];
+    for (const san of ["e4", "d5", "exd5", "Qxd5", "Qe2", "Qe6", "Qxe6"]) {
+      cB.move(san);
+      fensB.push(cB.fen());
+    }
+    const engineB: ChessEngine = {
+      async evaluatePosition(fen, depth) {
+        if (fen === fensB[5]) {
+          // Before 3... Qe6?? (ply idx 5): +20cp
+          return {
+            fen,
+            depth,
+            bestMoveUci: "b8c6",
+            bestMoveSan: "Nc6",
+            whiteCp: 20,
+            lines: [{ multipv: 1, cp: 20, pvUci: ["b8c6"], pvSan: ["Nc6"] }],
+          };
+        }
+        if (fen === fensB[6]) {
+          // Before 4. Qxe6 (ply idx 6): +400cp, PV2 is -50cp
+          return {
+            fen,
+            depth,
+            bestMoveUci: "e2e6",
+            bestMoveSan: "Qxe6",
+            whiteCp: 400,
+            lines: [
+              { multipv: 1, cp: 400, pvUci: ["e2e6"], pvSan: ["Qxe6"] },
+              { multipv: 2, cp: -50, pvUci: ["b1c3"], pvSan: ["Nc3"] },
+            ],
+          };
+        }
+        if (fen === fensB[7]) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "f7e6",
+            bestMoveSan: "fxe6",
+            whiteCp: 400,
+            lines: [{ multipv: 1, cp: 400, pvUci: ["f7e6"], pvSan: ["fxe6"] }],
+          };
+        }
+        return {
+          fen,
+          depth,
+          bestMoveUci: "e2e6",
+          bestMoveSan: "Qxe6",
+          whiteCp: 20,
+          lines: [{ multipv: 1, cp: 20, pvUci: ["e2e6"], pvSan: ["Qxe6"] }],
+        };
+      },
+      dispose() {},
+    };
+    const resB = await analyzeGame(blunderSqPgn, engineB, { depth: 12 });
+    const moveQxe6 = resB.moves[6];
+    expect(moveQxe6.san).toBe("Qxe6");
+    expect(moveQxe6.classification.badge).toBe("Best");
+  });
 });
