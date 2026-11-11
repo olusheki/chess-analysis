@@ -94,8 +94,8 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
   // Criteria:
   // - Sacrifices significant material (>= 2 pawns or piece)
   // - Matches PV1 or deltaWP is negligible (<= 1.0%)
-  // - Position remains winning or balanced (wpPlayed >= 50%)
-  if (materialSacrificed >= 2 && (isBestMove || deltaWP <= 1.0) && wpPlayed >= 48.0) {
+  // - Position remains sound / competitive (wpPlayed >= 38%, allowing dynamic equalizing sacrifices like 24. Rxd4!!)
+  if (materialSacrificed >= 2 && (isBestMove || deltaWP <= 1.0) && wpPlayed >= 38.0) {
     return createResult("Brilliant", deltaWP, true);
   }
 
