@@ -59,7 +59,9 @@ export class ChessComApiService {
    */
   static async getPlayerProfile(username: string): Promise<ChessComPlayerProfile | null> {
     try {
-      const sanitized = encodeURIComponent(username.trim().toLowerCase());
+      const normalized = username.trim().toLowerCase();
+      if (!normalized) return null;
+      const sanitized = encodeURIComponent(normalized);
       const res = await fetch(`${this.BASE_URL}/player/${sanitized}`, {
         headers: this.HEADERS,
       });
@@ -77,55 +79,51 @@ export class ChessComApiService {
   }
 
   /**
-   * Fetches recent completed games for a user (queries the most recent monthly archive)
-   * @param username Chess.com username
-   * @param limit Maximum number of recent games to return (defaults to 15)
+   * Fetches recent completed standard chess games for a user
+   * (queries latest monthly archives until `limit` games are collected)
    */
   static async getRecentGames(username: string, limit: number = 15): Promise<FormattedGameListItem[]> {
-    try {
-      const sanitized = encodeURIComponent(username.trim().toLowerCase());
-      
-      // 1. Get list of all monthly archives
-      const archivesRes = await fetch(`${this.BASE_URL}/player/${sanitized}/games/archives`, {
-        headers: this.HEADERS,
-      });
-
-      if (!archivesRes.ok) {
-        throw new Error(`Failed to fetch game archives for ${username}`);
-      }
-
-      const { archives }: { archives: string[] } = await archivesRes.json();
-      if (!archives || archives.length === 0) {
-        return [];
-      }
-
-      // 2. Fetch the most recent monthly archive (last entry in list)
-      const latestArchiveUrl = archives[archives.length - 1];
-      const gamesRes = await fetch(latestArchiveUrl, { headers: this.HEADERS });
-
-      if (!gamesRes.ok) {
-        throw new Error(`Failed to fetch games from archive ${latestArchiveUrl}`);
-      }
-
-      const { games }: { games: ChessComGameItem[] } = await gamesRes.json();
-      if (!games || games.length === 0) {
-        // If current month has no games yet, fallback to previous month if available
-        if (archives.length > 1) {
-          const prevArchiveUrl = archives[archives.length - 2];
-          const prevGamesRes = await fetch(prevArchiveUrl, { headers: this.HEADERS });
-          if (prevGamesRes.ok) {
-            const prevData = await prevGamesRes.json();
-            return this.formatAndSortGames(prevData.games, sanitized, limit);
-          }
-        }
-        return [];
-      }
-
-      return this.formatAndSortGames(games, sanitized, limit);
-    } catch (error) {
-      console.error(`Error retrieving games for ${username}:`, error);
-      throw error;
+    const rawUser = username.trim().toLowerCase();
+    if (!rawUser) {
+      throw new Error("Username is required");
     }
+    const sanitized = encodeURIComponent(rawUser);
+
+    const archivesRes = await fetch(`${this.BASE_URL}/player/${sanitized}/games/archives`, {
+      headers: this.HEADERS,
+    });
+
+    if (!archivesRes.ok) {
+      throw new Error(`Failed to fetch game archives for ${username}`);
+    }
+
+    const { archives }: { archives: string[] } = await archivesRes.json();
+    if (!archives || archives.length === 0) {
+      return [];
+    }
+
+    const collectedGames: ChessComGameItem[] = [];
+    // Walk backwards through monthly archives (max 3 months) until limit standard games are gathered
+    for (let i = archives.length - 1; i >= Math.max(0, archives.length - 3); i--) {
+      const archiveUrl = archives[i];
+      const gamesRes = await fetch(archiveUrl, { headers: this.HEADERS });
+      if (!gamesRes.ok) {
+        if (i === archives.length - 1 && collectedGames.length === 0) {
+          throw new Error(`Failed to fetch games from archive ${archiveUrl}`);
+        }
+        continue;
+      }
+
+      const data: { games?: ChessComGameItem[] } = await gamesRes.json();
+      const standardGames = (data.games ?? []).filter(
+        (g) => Boolean(g.pgn) && (!g.rules || g.rules === "chess")
+      );
+      collectedGames.push(...standardGames);
+
+      if (collectedGames.length >= limit) break;
+    }
+
+    return this.formatAndSortGames(collectedGames, rawUser, limit);
   }
 
   /**
@@ -138,7 +136,6 @@ export class ChessComApiService {
   ): FormattedGameListItem[] {
     const userLower = username.toLowerCase();
 
-    // Sort descending by end_time
     const sorted = [...games].sort((a, b) => b.end_time - a.end_time);
     const sliced = sorted.slice(0, limit);
 
