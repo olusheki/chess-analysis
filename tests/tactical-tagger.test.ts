@@ -195,4 +195,107 @@ describe("tactical-tagger (deterministic board feature detector)", () => {
     const pseudoForkCtx = playAndExtract(pseudoForkFen, "Nf2", 20);
     expect(pseudoForkCtx.tags).not.toContain("TACTICAL_FORK");
   });
+
+  it("covers castling flags, endgame development gate, tempo bounds, highest-value hanging piece, skewer/pin/discovered edge guards, and piece names", () => {
+    // 1. Castling (k and q flags), non-castling King move, and malformed SAN fallback
+    const kCastle = playAndExtract("4k3/8/8/8/8/8/8/4K2R w K - 0 15", "O-O", 15);
+    expect(kCastle.tags).toContain("KING_SAFETY_CASTLE");
+    const qCastle = playAndExtract("4k3/8/8/8/8/8/8/R3K3 w Q - 0 15", "O-O-O", 15);
+    expect(qCastle.tags).toContain("KING_SAFETY_CASTLE");
+    const kingStep = playAndExtract("r3k2r/8/8/8/8/8/8/4K3 w - - 0 15", "Kf1", 15);
+    expect(kingStep.tags).not.toContain("KING_SAFETY_CASTLE");
+    const malformedCtx = extractTacticalContext(
+      "4k3/8/8/8/8/8/8/4K3 w - - 0 15",
+      "4k3/8/8/8/8/8/8/4K3 b - - 0 15",
+      "Zzz9",
+      15
+    );
+    expect(malformedCtx.tags).not.toContain("KING_SAFETY_CASTLE");
+
+    // 2. Endgame must suppress DEVELOPMENT tags on Knight/Bishop moves
+    const endgameDev = playAndExtract("4k3/8/8/8/8/8/8/1N2K3 w - - 0 40", "Nc3", 40);
+    expect(endgameDev.gamePhase).toBe("Endgame");
+    expect(endgameDev.tags).not.toContain("DEVELOPMENT");
+
+    // 3. Tempo gain: Pawn & Knight attacking Rook/Queen trigger TEMPO_GAIN; attacking Knight or with Queen does not
+    const pawnTempoRook = playAndExtract("4k3/8/8/3r4/2P5/8/8/4K3 w - - 0 15", "c5", 15);
+    expect(pawnTempoRook.tags).not.toContain("TEMPO_GAIN"); // c5 stops short; test c4 attacking b5 Rook instead
+    const pawnHitsRook = playAndExtract("4k3/8/8/1r6/8/2P5/8/4K3 w - - 0 15", "c4", 15);
+    expect(pawnHitsRook.tags).toContain("TEMPO_GAIN");
+    const knightHitsRook = playAndExtract("4k3/8/8/3r4/8/8/8/1N2K3 w - - 0 15", "Nc3", 15);
+    expect(knightHitsRook.tags).toContain("TEMPO_GAIN");
+    const knightHitsFriendlyRook = playAndExtract("4k3/8/8/3R4/8/8/8/1N2K3 w - - 0 15", "Nc3", 15);
+    expect(knightHitsFriendlyRook.tags).not.toContain("TEMPO_GAIN");
+    const knightHitsBishop = playAndExtract("4k3/8/8/3b4/8/8/8/1N2K3 w - - 0 15", "Nc3", 15);
+    expect(knightHitsBishop.tags).not.toContain("TEMPO_GAIN");
+    const queenHitsRook = playAndExtract("4k3/8/8/3r4/8/8/8/3QK3 w - - 0 15", "Qd4", 15);
+    expect(queenHitsRook.tags).not.toContain("TEMPO_GAIN");
+
+    // 4. Highest-value friendly hanging piece wins regardless of board scan order, ignoring opponent hanging pieces
+    // Black Queen is undefended on a8; White has hanging Knight on a6 (attacked by Bb7) AND hanging Rook on h2 (attacked by Rb2) -> Rook (5) wins over Knight (3)
+    const highOverLow = playAndExtract("q3k3/1b6/N7/8/8/8/1r5R/4K3 w - - 0 20", "Kf1", 20);
+    expect(highOverLow.tags).toContain("HANGING_PIECE");
+    expect(highOverLow.hangingPieceDetails?.piece).toBe("Rook");
+    expect(highOverLow.hangingPieceDetails?.square).toBe("h2");
+    expect(highOverLow.hangingPieceDetails?.value).toBe(5);
+
+    // When higher-value Rook on a6 (attacked by Bb5) appears BEFORE lower-value Pawn on h2 (attacked by Bg3), Rook still wins (>)
+    const rookBeforePawn = playAndExtract("4k3/8/R7/1b6/8/6b1/7P/4K3 w - - 0 20", "Kd1", 20);
+    expect(rookBeforePawn.hangingPieceDetails?.piece).toBe("Rook");
+    expect(rookBeforePawn.hangingPieceDetails?.square).toBe("a6");
+
+    // 5. Skewer value & defense guards
+    // Rook defended by Nc2 skewering defended Queen on e5 in front of Knight on e7 (r < q -> valid skewer)
+    const rookSkewersDefendedQueen = playAndExtract(
+      "4k3/4n3/3p4/4q3/8/8/2N5/R5K1 w - - 0 25",
+      "Re1",
+      25
+    );
+    expect(rookSkewersDefendedQueen.tags).toContain("SKEWER");
+    expect(rookSkewersDefendedQueen.skeweredPieceDetails?.frontPiece).toBe("Queen");
+    expect(rookSkewersDefendedQueen.skeweredPieceDetails?.frontSquare).toBe("e5");
+    expect(rookSkewersDefendedQueen.skeweredPieceDetails?.backPiece).toBe("Knight");
+    expect(rookSkewersDefendedQueen.skeweredPieceDetails?.backSquare).toBe("e7");
+
+    // Queen on c2 attacking DEFENDED Rook on f5 in front of Knight on g6 (!(9 < 5) && frontDefended -> NOT a skewer)
+    const queenBlockedByDefendedRook = playAndExtract(
+      "6k1/8/4p1n1/5r2/8/8/8/1Q4K1 w - - 0 25",
+      "Qc2",
+      25
+    );
+    expect(queenBlockedByDefendedRook.tags).not.toContain("SKEWER");
+
+    // Queen on c2 attacking UNDEFENDED Rook on f5 in front of Knight on g6 (!frontDefended -> valid skewer)
+    const queenSkewersUndefendedRook = playAndExtract(
+      "6k1/8/6n1/5r2/8/8/8/1Q4K1 w - - 0 25",
+      "Qc2",
+      25
+    );
+    expect(queenSkewersUndefendedRook.tags).toContain("SKEWER");
+
+    // Pawn on g6 behind Knight on f5 must NOT trigger SKEWER (secondEnemy value < 3)
+    const skeweringBehindPawn = playAndExtract(
+      "6k1/8/6p1/5n2/8/8/8/1Q4K1 w - - 0 25",
+      "Qc2",
+      25
+    );
+    expect(skeweringBehindPawn.tags).not.toContain("SKEWER");
+
+    // 6. Relative pin against Rook + non-pin against equal-value Bishop
+    const pinToRook = playAndExtract("4k3/8/4r3/3n4/8/8/B7/6K1 w - - 0 25", "Bb3", 25);
+    expect(pinToRook.tags).toContain("RELATIVE_PIN");
+    expect(pinToRook.pinnedPieceDetails?.piece).toBe("Knight");
+    expect(pinToRook.pinnedPieceDetails?.pinnedTo).toBe("Rook");
+    const nonPinEqual = playAndExtract("4k3/8/4b3/3n4/8/8/B7/6K1 w - - 0 25", "Bb3", 25);
+    expect(nonPinEqual.tags).not.toContain("RELATIVE_PIN");
+
+    // 7. Discovered attack via unblocked Queen & game-over move safe no-mate check
+    const discoveredQueen = playAndExtract("3rk3/8/8/8/3N4/8/3Q4/6K1 w - - 0 25", "Nf5", 25);
+    expect(discoveredQueen.tags).toContain("DISCOVERED_ATTACK");
+    expect(discoveredQueen.discoveredTarget?.piece).toBe("Rook");
+    expect(discoveredQueen.discoveredTarget?.square).toBe("d8");
+
+    const checkmateMove = playAndExtract("6k1/5Q2/6K1/8/8/8/8/8 w - - 0 40", "Qg7#", 40);
+    expect(checkmateMove.tags).not.toContain("CHECKMATE_THREAT");
+  });
 });

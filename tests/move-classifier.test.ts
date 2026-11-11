@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { classifyMove, BADGE_METADATA, MoveClassificationInput } from "@/lib/analysis/move-classifier";
+import { centipawnsToWinProbability } from "@/lib/engine/win-probability";
 
 function baseInput(overrides: Partial<MoveClassificationInput> = {}): MoveClassificationInput {
   return {
@@ -13,6 +14,41 @@ function baseInput(overrides: Partial<MoveClassificationInput> = {}): MoveClassi
     isBestMove: false,
     ...overrides,
   };
+}
+
+function exactCpForWp(target: number): number {
+  if (centipawnsToWinProbability(0) === target) return 0;
+  let lo = -3000;
+  let hi = 3000;
+  for (let i = 0; i < 80; i++) {
+    const mid = 0.5 * (lo + hi);
+    if (centipawnsToWinProbability(mid) < target) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  const mid = 0.5 * (lo + hi);
+  const buf = new ArrayBuffer(8);
+  const f64 = new Float64Array(buf);
+  const u64 = new BigUint64Array(buf);
+  f64[0] = mid;
+  const baseBits = u64[0];
+  let best = mid;
+  let bestErr = Math.abs(centipawnsToWinProbability(mid) - target);
+  for (let offset = -16n; offset <= 16n; offset++) {
+    u64[0] = baseBits + offset;
+    const cand = f64[0];
+    if (!Number.isFinite(cand) || (mid < 0 && cand >= 0) || (mid > 0 && cand <= 0)) continue;
+    const wp = centipawnsToWinProbability(cand);
+    if (wp === target) return cand;
+    const err = Math.abs(wp - target);
+    if (err < bestErr) {
+      bestErr = err;
+      best = cand;
+    }
+  }
+  return best;
 }
 
 describe("move-classifier (11 official Chess.com badges)", () => {
@@ -355,5 +391,488 @@ describe("move-classifier (11 official Chess.com badges)", () => {
       })
     );
     expect(freeQueenCapture.badge).toBe("Best");
+  });
+
+  it("checks Forced mate-escape guards (isBestMove, mateBest, matePV2, legalMoveCount)", () => {
+    // Only PV1 escapes M1 (even when mateBest > 0 is a forced counter-mate!)
+    const escapingMateWhileWinning = classifyMove(
+      baseInput({
+        isBestMove: true,
+        mateBest: 3,
+        matePlayed: 3,
+        matePV2: -1,
+      })
+    );
+    expect(escapingMateWhileWinning.badge).toBe("Forced");
+    expect(escapingMateWhileWinning.isKeyMoment).toBe(false);
+    expect(escapingMateWhileWinning.isBlunder).toBe(false);
+
+    // mateBest === 0 is a non-mate sentinel (equivalent to undefined), so Forced applies if matePV2 === -1
+    const zeroMateEscapingM1 = classifyMove(
+      baseInput({
+        isBestMove: true,
+        mateBest: 0,
+        cpBest: 50,
+        cpPlayed: 50,
+        matePV2: -1,
+      })
+    );
+    expect(zeroMateEscapingM1.badge).toBe("Forced");
+
+    // mateBest < 0 means PV1 itself gets mated, so not an "escape"
+    const alreadyMatedNotForced = classifyMove(
+      baseInput({
+        isBestMove: true,
+        mateBest: -2,
+        matePlayed: -2,
+        matePV2: -1,
+      })
+    );
+    expect(alreadyMatedNotForced.badge).toBe("Best");
+
+    // Player did NOT play the escaping move -> Blunder, not Forced
+    const missedMateEscape = classifyMove(
+      baseInput({
+        isBestMove: false,
+        cpBest: 50,
+        cpPlayed: -500,
+        matePV2: -1,
+      })
+    );
+    expect(missedMateEscape.badge).toBe("Blunder");
+
+    // PV2 is M2 (-2), not immediate M1 (-1) -> not classified as Forced
+    const pv2MateInTwoNotForced = classifyMove(
+      baseInput({
+        isBestMove: true,
+        cpBest: 50,
+        cpPlayed: 50,
+        matePV2: -2,
+      })
+    );
+    expect(pv2MateInTwoNotForced.badge).toBe("Best");
+
+    // legalMoveCount === 2 or 0 is not single-legal Forced
+    expect(classifyMove(baseInput({ legalMoveCount: 2, isBestMove: true })).badge).toBe("Best");
+    expect(classifyMove(baseInput({ legalMoveCount: 0, isBestMove: true })).badge).toBe("Best");
+  });
+
+  it("enforces exact Brilliant (!!), Great (!), and Miss (X) threshold boundaries", () => {
+    // --- Brilliant boundaries ---
+    // Non-PV1 near-best sacrifice: materialSacrificed === 2, cpDrop === 35, deltaWP <= 1.0
+    const nonBestSacAt35Cp = classifyMove(
+      baseInput({
+        isBestMove: false,
+        materialSacrificed: 2,
+        cpBest: 435,
+        cpPlayed: 400,
+      })
+    );
+    expect(nonBestSacAt35Cp.badge).toBe("Brilliant");
+    expect(nonBestSacAt35Cp.isKeyMoment).toBe(true);
+    expect(nonBestSacAt35Cp.isBlunder).toBe(false);
+    expect(nonBestSacAt35Cp.color).toBe("#1baca6");
+    expect(nonBestSacAt35Cp.symbol).toBe("!!");
+
+    // cpDrop === 36 rejects non-PV1 Brilliant
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: false,
+          materialSacrificed: 2,
+          cpBest: 436,
+          cpPlayed: 400,
+        })
+      ).badge
+    ).toBe("Excellent");
+
+    // Exact deltaWP === 1.0 allows non-PV1 Brilliant; 1.1 rejects
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: false,
+          materialSacrificed: 2,
+          cpBest: exactCpForWp(70),
+          cpPlayed: exactCpForWp(69),
+        })
+      ).badge
+    ).toBe("Brilliant");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: false,
+          materialSacrificed: 2,
+          cpBest: exactCpForWp(70),
+          cpPlayed: exactCpForWp(68.9),
+        })
+      ).badge
+    ).toBe("Excellent");
+
+    // cpPlayed > cpBest clamps cpDrop to 0
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: false,
+          materialSacrificed: 2,
+          cpBest: 100,
+          cpPlayed: 150,
+        })
+      ).badge
+    ).toBe("Brilliant");
+
+    // wpPlayed === 38.0 exact succeeds; 37.99 fails
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          materialSacrificed: 2,
+          cpBest: exactCpForWp(38),
+          cpPlayed: exactCpForWp(38),
+        })
+      ).badge
+    ).toBe("Brilliant");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          materialSacrificed: 2,
+          cpBest: exactCpForWp(37.99),
+          cpPlayed: exactCpForWp(37.99),
+        })
+      ).badge
+    ).toBe("Best");
+
+    // matePlayed === mateBest (not worsened) succeeds; matePlayed > mateBest blocks Brilliant; mateBest === 0 is not forced mate
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: false,
+          materialSacrificed: 3,
+          cpBest: 0,
+          cpPlayed: 0,
+          mateBest: 3,
+          matePlayed: 3,
+        })
+      ).badge
+    ).toBe("Brilliant");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: false,
+          materialSacrificed: 3,
+          cpBest: 0,
+          cpPlayed: 0,
+          mateBest: 3,
+          matePlayed: 4,
+        })
+      ).badge
+    ).toBe("Excellent");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: false,
+          materialSacrificed: 3,
+          cpBest: 100,
+          cpPlayed: 100,
+          mateBest: 0,
+          matePlayed: 5,
+        })
+      ).badge
+    ).toBe("Brilliant");
+
+    // isMopUp exact thresholds: cpBest >= 650 && cpPV2 >= 450 && !hasForcedMate
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          materialSacrificed: 3,
+          cpBest: 650,
+          cpPlayed: 650,
+          cpPV2: 450,
+        })
+      ).badge
+    ).toBe("Best");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          materialSacrificed: 3,
+          cpBest: 649,
+          cpPlayed: 649,
+          cpPV2: 450,
+        })
+      ).badge
+    ).toBe("Brilliant");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          materialSacrificed: 3,
+          cpBest: 650,
+          cpPlayed: 650,
+          cpPV2: 449,
+        })
+      ).badge
+    ).toBe("Brilliant");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          materialSacrificed: 3,
+          cpBest: 700,
+          cpPlayed: 700,
+          cpPV2: 550,
+          mateBest: 2,
+          matePlayed: 2,
+        })
+      ).badge
+    ).toBe("Brilliant");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          materialSacrificed: 3,
+          cpBest: 700,
+          cpPlayed: 700,
+          cpPV2: 550,
+          mateBest: 0,
+        })
+      ).badge
+    ).toBe("Best");
+
+    // --- Great boundaries ---
+    const greatAtExact60 = classifyMove(
+      baseInput({
+        isBestMove: true,
+        cpBest: exactCpForWp(60),
+        cpPlayed: exactCpForWp(60),
+        cpPV2: exactCpForWp(44),
+      })
+    );
+    expect(greatAtExact60.badge).toBe("Great");
+    expect(greatAtExact60.isKeyMoment).toBe(true);
+    expect(greatAtExact60.isBlunder).toBe(false);
+    expect(greatAtExact60.symbol).toBe("!");
+
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          cpBest: exactCpForWp(59.9),
+          cpPlayed: exactCpForWp(59.9),
+          cpPV2: exactCpForWp(40),
+        })
+      ).badge
+    ).toBe("Best");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          cpBest: exactCpForWp(75),
+          cpPlayed: exactCpForWp(75),
+          cpPV2: exactCpForWp(55),
+        })
+      ).badge
+    ).toBe("Best");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          cpBest: exactCpForWp(68),
+          cpPlayed: exactCpForWp(68),
+          cpPV2: exactCpForWp(53), // diff = 15.0 exact, wpPV2 = 53 (>= 48 & < 55)
+        })
+      ).badge
+    ).toBe("Great");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          cpBest: exactCpForWp(67.9),
+          cpPlayed: exactCpForWp(67.9),
+          cpPV2: exactCpForWp(53), // diff = 14.9 < 15, wpPV2 >= 48
+        })
+      ).badge
+    ).toBe("Best");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          cpBest: exactCpForWp(61),
+          cpPlayed: exactCpForWp(61),
+          cpPV2: exactCpForWp(48), // wpPV2 === 48.0, diff = 13 < 15 -> Best
+        })
+      ).badge
+    ).toBe("Best");
+    expect(
+      classifyMove(
+        baseInput({
+          isBestMove: true,
+          cpBest: exactCpForWp(61),
+          cpPlayed: exactCpForWp(61),
+          cpPV2: exactCpForWp(47.99), // wpPV2 < 48 -> Great
+        })
+      ).badge
+    ).toBe("Great");
+
+    // --- Miss & severe blunder boundaries ---
+    const missAtBoundary = classifyMove(
+      baseInput({
+        prevMoveOpponentDeltaWP: 18.0,
+        cpBest: exactCpForWp(55),
+        cpPlayed: exactCpForWp(40), // deltaWP = 15.0 exact, wpBest = 55.0 exact
+      })
+    );
+    expect(missAtBoundary.badge).toBe("Miss");
+    expect(missAtBoundary.isKeyMoment).toBe(true);
+    expect(missAtBoundary.isBlunder).toBe(true);
+
+    expect(
+      classifyMove(
+        baseInput({
+          prevMoveOpponentDeltaWP: undefined,
+          cpBest: exactCpForWp(80),
+          cpPlayed: exactCpForWp(60),
+        })
+      ).badge
+    ).toBe("Mistake");
+    expect(
+      classifyMove(
+        baseInput({
+          prevMoveOpponentDeltaWP: 17.99,
+          cpBest: exactCpForWp(80),
+          cpPlayed: exactCpForWp(60),
+        })
+      ).badge
+    ).toBe("Mistake");
+    expect(
+      classifyMove(
+        baseInput({
+          prevMoveOpponentDeltaWP: 20.0,
+          cpBest: exactCpForWp(80),
+          cpPlayed: exactCpForWp(65.01), // deltaWP = 14.99 < 15.0 (falls through to Mistake, not Miss)
+        })
+      ).badge
+    ).toBe("Mistake");
+    expect(
+      classifyMove(
+        baseInput({
+          prevMoveOpponentDeltaWP: 20.0,
+          cpBest: exactCpForWp(54.99),
+          cpPlayed: exactCpForWp(34.99),
+        })
+      ).badge
+    ).toBe("Mistake");
+
+    // Severe blunder vs Miss: deltaWP === 55.0 & wpPlayed === 30.0 stays Miss
+    expect(
+      classifyMove(
+        baseInput({
+          prevMoveOpponentDeltaWP: 25.0,
+          cpBest: exactCpForWp(85),
+          cpPlayed: exactCpForWp(30),
+        })
+      ).badge
+    ).toBe("Miss");
+    // deltaWP > 55.0 overrides Miss to Blunder even when wpPlayed === 30.0
+    expect(
+      classifyMove(
+        baseInput({
+          prevMoveOpponentDeltaWP: 25.0,
+          cpBest: exactCpForWp(85.1),
+          cpPlayed: exactCpForWp(30),
+        })
+      ).badge
+    ).toBe("Blunder");
+    // wpPlayed < 30.0 overrides Miss to Blunder even when deltaWP <= 55.0
+    expect(
+      classifyMove(
+        baseInput({
+          prevMoveOpponentDeltaWP: 25.0,
+          cpBest: exactCpForWp(60),
+          cpPlayed: exactCpForWp(29.99),
+        })
+      ).badge
+    ).toBe("Blunder");
+  });
+
+  it("enforces exact deltaWP thresholds, CAPS2 accuracy, and keyMoment/isBlunder flags across remaining badges", () => {
+    const nearBest = classifyMove(
+      baseInput({
+        isBestMove: false,
+        cpBest: exactCpForWp(50),
+        cpPlayed: exactCpForWp(49.85), // deltaWP = 0.15 <= 0.2
+      })
+    );
+    expect(nearBest.badge).toBe("Best");
+    expect(nearBest.isKeyMoment).toBe(false);
+    expect(nearBest.isBlunder).toBe(false);
+
+    const excellentAt2 = classifyMove(
+      baseInput({
+        isBestMove: false,
+        cpBest: exactCpForWp(75),
+        cpPlayed: exactCpForWp(73), // deltaWP === 2.0
+      })
+    );
+    expect(excellentAt2.badge).toBe("Excellent");
+    expect(excellentAt2.isKeyMoment).toBe(false);
+    expect(excellentAt2.isBlunder).toBe(false);
+    expect(excellentAt2.accuracy).toBe(91.4);
+
+    const goodAt21 = classifyMove(
+      baseInput({
+        isBestMove: false,
+        cpBest: exactCpForWp(75),
+        cpPlayed: exactCpForWp(72.9),
+      })
+    );
+    expect(goodAt21.badge).toBe("Good");
+    expect(goodAt21.isKeyMoment).toBe(false);
+
+    const goodAt5 = classifyMove(
+      baseInput({
+        isBestMove: false,
+        cpBest: exactCpForWp(50),
+        cpPlayed: exactCpForWp(45), // deltaWP === 5.0
+      })
+    );
+    expect(goodAt5.badge).toBe("Good");
+    expect(goodAt5.isKeyMoment).toBe(false);
+
+    const inaccuracyAt12 = classifyMove(
+      baseInput({
+        isBestMove: false,
+        cpBest: exactCpForWp(50),
+        cpPlayed: exactCpForWp(38), // deltaWP === 12.0
+      })
+    );
+    expect(inaccuracyAt12.badge).toBe("Inaccuracy");
+    expect(inaccuracyAt12.isKeyMoment).toBe(false);
+    expect(inaccuracyAt12.isBlunder).toBe(false);
+    expect(inaccuracyAt12.accuracy).toBe(58.0);
+
+    const mistakeAt25 = classifyMove(
+      baseInput({
+        isBestMove: false,
+        cpBest: exactCpForWp(75),
+        cpPlayed: exactCpForWp(50), // deltaWP === 25.0
+      })
+    );
+    expect(mistakeAt25.badge).toBe("Mistake");
+    expect(mistakeAt25.isKeyMoment).toBe(true);
+    expect(mistakeAt25.isBlunder).toBe(false);
+    expect(mistakeAt25.accuracy).toBe(31.6);
+
+    const blunderAt251 = classifyMove(
+      baseInput({
+        isBestMove: false,
+        cpBest: exactCpForWp(75.1),
+        cpPlayed: exactCpForWp(50), // deltaWP === 25.1 > 25.0
+      })
+    );
+    expect(blunderAt251.badge).toBe("Blunder");
+    expect(blunderAt251.isKeyMoment).toBe(true);
+    expect(blunderAt251.isBlunder).toBe(true);
   });
 });

@@ -3,7 +3,11 @@
  * Evaluates and assigns one of 11 official Chess.com badges.
  */
 
-import { calculateWinProbabilityDelta, centipawnsToWinProbability } from "../engine/win-probability";
+import {
+  calculateMoveAccuracy,
+  calculateWinProbabilityDelta,
+  centipawnsToWinProbability,
+} from "../engine/win-probability";
 
 export type MoveBadge =
   | "Brilliant"   // !!  #1baca6
@@ -61,6 +65,8 @@ export const BADGE_METADATA: Record<MoveBadge, { color: string; symbol: string; 
   Forced:      { color: "#8c8883", symbol: "➔",  priority: 11 },
 };
 
+const KEY_MOMENT_BADGES = new Set<MoveBadge>(["Brilliant", "Great", "Miss", "Blunder", "Mistake"]);
+
 export function classifyMove(input: MoveClassificationInput): ClassificationResult {
   const {
     isBook,
@@ -85,7 +91,7 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
 
   // 2. Forced Move Check (Only 1 legal move, or only PV1 escapes immediate checkmate)
   const onlyMoveEscapesMate =
-    isBestMove && (mateBest === undefined || mateBest > 0) && matePV2 === -1;
+    isBestMove && (mateBest === undefined || mateBest >= 0) && matePV2 === -1;
   if (legalMoveCount === 1 || onlyMoveEscapesMate) {
     return createResult("Forced", 0);
   }
@@ -104,21 +110,19 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
   // - Position remains sound / competitive (wpPlayed >= 38%, allowing dynamic equalizing sacrifices like 24. Rxd4!!)
   const cpDrop =
     mateBest === undefined && matePlayed === undefined ? Math.max(0, cpBest - cpPlayed) : 0;
-  const lostMate =
-    mateBest !== undefined && mateBest > 0 && (matePlayed === undefined || matePlayed <= 0);
+  const hasForcedMate = mateBest !== undefined && mateBest > 0;
+  const lostMate = hasForcedMate && (matePlayed === undefined || matePlayed <= 0);
   const worsenedMate =
-    mateBest !== undefined &&
-    mateBest > 0 &&
-    (matePlayed === undefined || matePlayed <= 0 || matePlayed > mateBest);
+    lostMate || (hasForcedMate && matePlayed !== undefined && matePlayed > mateBest);
   const isMopUp =
     cpBest >= 650 &&
-    (mateBest === undefined || mateBest <= 0) &&
+    !hasForcedMate &&
     cpPV2 !== undefined &&
     cpPV2 >= 450;
   const isNearBestForSac = isBestMove || (deltaWP <= 1.0 && cpDrop <= 35 && !lostMate);
   if (materialSacrificed >= 2 && isNearBestForSac && wpPlayed >= 38.0) {
     if (!worsenedMate && !isKingCheckEscape && !isMopUp) {
-      return createResult("Brilliant", deltaWP, true);
+      return createResult("Brilliant", deltaWP);
     }
   }
 
@@ -130,7 +134,7 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
   if (isBestMove && !isRecapture && !input.isObviousFreeCapture && cpPV2 !== undefined) {
     const wpPV2 = centipawnsToWinProbability(cpPV2, matePV2);
     if (wpBest >= 60.0 && wpPV2 < 55.0 && (wpBest - wpPV2 >= 15.0 || wpPV2 < 48.0)) {
-      return createResult("Great", deltaWP, true);
+      return createResult("Great", deltaWP);
     }
   }
 
@@ -139,13 +143,9 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
     return createResult("Best", deltaWP);
   }
 
-  // Guard: extreme blunders (>55% WP drop, falling into <30% lost position, or blundering mate)
+  // Guard: extreme blunders (>55% WP drop or falling into <30% lost position, including getting mated)
   // must always be classified as Blunder rather than Miss even if the opponent previously blundered.
-  const isSevereBlunder =
-    deltaWP > 25.0 &&
-    (deltaWP > 55.0 ||
-      wpPlayed < 30.0 ||
-      (matePlayed !== undefined && matePlayed < 0 && (mateBest === undefined || mateBest >= 0)));
+  const isSevereBlunder = deltaWP > 55.0 || wpPlayed < 30.0;
 
   // 6. Miss (X)
   // Opponent blundered on previous turn giving a big tactical opportunity,
@@ -157,19 +157,19 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
     deltaWP >= 15.0 &&
     wpBest >= 55.0
   ) {
-    return createResult("Miss", deltaWP, true);
+    return createResult("Miss", deltaWP);
   }
 
   // 7. Blunder (??)
-  // Dramatic loss of win probability (>= 25%) or hanging checkmate/decisive piece
+  // Dramatic loss of win probability (> 25%) or hanging checkmate/decisive piece
   if (deltaWP > 25.0) {
-    return createResult("Blunder", deltaWP, true);
+    return createResult("Blunder", deltaWP);
   }
 
   // 8. Mistake (?)
   // Loss between 12% and 25% WP
   if (deltaWP > 12.0) {
-    return createResult("Mistake", deltaWP, true);
+    return createResult("Mistake", deltaWP);
   }
 
   // 9. Inaccuracy (?!)
@@ -187,18 +187,16 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
   return createResult("Excellent", deltaWP);
 }
 
-function createResult(badge: MoveBadge, deltaWP: number, isKeyMoment: boolean = false): ClassificationResult {
+function createResult(badge: MoveBadge, deltaWP: number): ClassificationResult {
   const meta = BADGE_METADATA[badge];
-  const rawAccuracy = 103.1668 * Math.exp(-0.04354 * deltaWP) - 3.1669;
-  const accuracy = Math.min(100.0, Math.max(0.0, parseFloat(rawAccuracy.toFixed(1))));
 
   return {
     badge,
     deltaWP,
-    accuracy,
+    accuracy: calculateMoveAccuracy(deltaWP),
     color: meta.color,
     symbol: meta.symbol,
     isBlunder: badge === "Blunder" || badge === "Miss",
-    isKeyMoment: isKeyMoment || badge === "Brilliant" || badge === "Great",
+    isKeyMoment: KEY_MOMENT_BADGES.has(badge),
   };
 }

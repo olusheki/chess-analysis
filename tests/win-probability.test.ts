@@ -76,6 +76,25 @@ describe("win-probability engine math", () => {
       const { deltaWP } = calculateWinProbabilityDelta(850, 10000, undefined, 5);
       expect(deltaWP).toBe(0);
     });
+
+    it("enforces exact immediate-mate delay penalties across M3/M4 boundaries and capping", () => {
+      // M3 -> finite cp (matePlayed=undefined) triggers 12.5% delayPenalty
+      const m3Lost = calculateWinProbabilityDelta(10000, 300, 3, undefined);
+      expect(m3Lost.deltaWP).toBeCloseTo(12.5, 4);
+
+      // M4 -> finite cp 300 (mateBest > 3) uses standard WP delta rather than forced immediate-mate penalty
+      const m4ToCp = calculateWinProbabilityDelta(10000, 300, 4, undefined);
+      expect(m4ToCp.deltaWP).toBeLessThan(12.5);
+
+      // M2 -> M5 (diff === 3, not > 3) stays tiny, while M2 -> M6 applies (6-2)*1.8 = 7.2%
+      const m2ToM5 = calculateWinProbabilityDelta(10000, 10000, 2, 5);
+      const m2ToM6 = calculateWinProbabilityDelta(10000, 10000, 2, 6);
+      const m1ToM15 = calculateWinProbabilityDelta(10000, 10000, 1, 15);
+      expect(m2ToM5.deltaWP).toBeLessThan(0.5);
+      expect(m2ToM6.deltaWP).toBeCloseTo(7.2, 4);
+      // Capped at 12.5% rather than unbounded (15-1)*1.8
+      expect(m1ToM15.deltaWP).toBeCloseTo(12.5, 4);
+    });
   });
 
   describe("calculateMoveAccuracy (CAPS2)", () => {
@@ -136,8 +155,8 @@ describe("win-probability engine math", () => {
       expect(withOneBlunder).toBeGreaterThan(20);
     });
 
-    it("prevents a single blunder among solid moves from collapsing to ~50% via unweighted 2.0 floor and downweights garbage-time moves symmetrically", () => {
-      // Game 9 shape: 1 blunder in 16 moves (~68% Chess.com) should stay above 55%, not ~23% harmonic collapse
+    it("prevents a single blunder among solid moves from collapsing to ~50% via symmetric leverage-weighted 8.0 harmonic floor and downweights garbage-time moves symmetrically", () => {
+      // Game 9 shape: 1 blunder in 16 moves (~68% Chess.com) should stay above 54% (evaluates to 57.3%), not ~23% harmonic collapse
       const oneBlunderSixteenMoves = calculateOverallGameAccuracy([
         { deltaWP: 0, wpBest: 55 },
         { deltaWP: 0, wpBest: 54 },
@@ -224,11 +243,56 @@ describe("win-probability engine math", () => {
         centipawnsToWinProbability(100),
         6
       );
+      expect(centipawnsToWinProbability(0, 6)).toBeCloseTo(99.6, 5);
+      expect(centipawnsToWinProbability(0, -6)).toBeCloseTo(0.4, 5);
       expect(centipawnsToWinProbability(0, 25)).toBeCloseTo(99.1, 2);
       expect(centipawnsToWinProbability(0, -25)).toBeCloseTo(0.9, 2);
       expect(calculateMoveAccuracy(0.001)).toBe(100.0);
       expect(calculateMoveAccuracy(0.02)).toBeLessThan(100.0);
       expect(calculateWinProbabilityDelta(0, 0, undefined, 0).deltaWP).toBe(0);
+      // matePlayed === 0 must not trigger the forced-mate conversion shortcut
+      expect(calculateWinProbabilityDelta(500, 0, undefined, 0).deltaWP).toBeGreaterThan(40);
+    });
+
+    it("kills remaining anchored and unanchored Elo boundary mutations cleanly", () => {
+      // Single-side Elo anchoring and zero-Elo fallback
+      const onlyPlayer = estimatePerformanceRating(75, 0, 0, { playerElo: 1200, resultScore: 0.5 });
+      const onlyOpp = estimatePerformanceRating(75, 0, 0, { opponentElo: 1200, resultScore: 0.5 });
+      const zeroEloFallback = estimatePerformanceRating(80, 1, 2, { playerElo: 0, opponentElo: 0 });
+      expect(onlyPlayer).toBe(onlyOpp);
+      expect(onlyPlayer).toBeGreaterThan(1200);
+      expect(zeroEloFallback).toBe(estimatePerformanceRating(80, 1, 2));
+
+      // Upward & downward opponent gap bounds + draw threshold (score === 0.5 allows +600 vs loss +350)
+      const drawVsGiant = estimatePerformanceRating(70, 0, 0, {
+        playerElo: 400,
+        opponentElo: 2000,
+        resultScore: 0.5,
+      });
+      const lossVsGiant = estimatePerformanceRating(70, 0, 0, {
+        playerElo: 400,
+        opponentElo: 2000,
+        resultScore: 0,
+      });
+      expect(drawVsGiant).toBeLessThan(900);
+      expect(drawVsGiant - lossVsGiant).toBeGreaterThan(80);
+
+      const stompLowRated = estimatePerformanceRating(90, 0, 0, {
+        playerElo: 2000,
+        opponentElo: 600,
+        resultScore: 1,
+      });
+      expect(stompLowRated).toBeGreaterThan(1950);
+      expect(stompLowRated).toBeLessThan(2150);
+
+      // Blunder/mistake tiebreakers affect both anchored and unanchored modes
+      const anchoredClean = estimatePerformanceRating(70, 0, 0, { playerElo: 1500, opponentElo: 1500 });
+      const anchoredBlunders = estimatePerformanceRating(70, 4, 3, { playerElo: 1500, opponentElo: 1500 });
+      expect(anchoredClean - anchoredBlunders).toBe(33);
+
+      const unanchoredNoErr = estimatePerformanceRating(80, 0, 0);
+      const unanchoredWithErr = estimatePerformanceRating(80, 2, 3);
+      expect(unanchoredNoErr - unanchoredWithErr).toBe(340);
     });
   });
 });
