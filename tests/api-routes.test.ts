@@ -1,0 +1,148 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { NextRequest } from "next/server";
+import { GET as getOpenings, POST as postOpenings } from "@/app/api/openings/route";
+import { POST as postExplain } from "@/app/api/explain/route";
+import { GET as getChessCom } from "@/app/api/chesscom/route";
+
+describe("Next.js API route handlers", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  describe("/api/openings", () => {
+    it("looks up opening by FEN and returns insight", async () => {
+      const fen = encodeURIComponent(
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+      );
+      const req = new NextRequest(`http://localhost:3000/api/openings?fen=${fen}`);
+      const res = await getOpenings(req);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.opening.eco).toBe("B00");
+      expect(data.insight.length).toBeGreaterThan(10);
+    });
+
+    it("searches openings by query string", async () => {
+      const req = new NextRequest("http://localhost:3000/api/openings?q=Sicilian&limit=5");
+      const res = await getOpenings(req);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.results.length).toBeGreaterThan(0);
+    });
+
+    it("classifies a SAN move sequence via POST", async () => {
+      const req = new NextRequest("http://localhost:3000/api/openings", {
+        method: "POST",
+        body: JSON.stringify({ movesSan: ["e4", "e5", "Nf3", "Nc6", "Bc4"] }),
+      });
+      const res = await postOpenings(req);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.opening.eco).toBe("C50");
+      expect(data.bookPlies).toBe(5);
+    });
+  });
+
+  describe("/api/explain", () => {
+    it("returns 400 for invalid payload", async () => {
+      const req = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        body: JSON.stringify({ mode: "move" }),
+      });
+      const res = await postExplain(req);
+      expect(res.status).toBe(400);
+    });
+
+    it("returns grounded move explanation in offline mode", async () => {
+      const req = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "move",
+          payload: {
+            moveSan: "Qe7",
+            playedBy: "Black",
+            moveNumber: 14,
+            badge: "Blunder",
+            evalBefore: "+0.4",
+            evalAfter: "+3.8",
+            deltaWP: 34.2,
+            engineBestMove: "Nd7",
+            bestMovePV: ["Nd7", "d4"],
+            tacticalContext: {
+              tags: ["HANGING_PIECE"],
+              hangingPieceDetails: { square: "d7", piece: "Knight", value: 3 },
+              isCheck: false,
+              isCastle: false,
+              gamePhase: "Middlegame",
+            },
+          },
+        }),
+      });
+      const res = await postExplain(req);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.badge).toBe("Blunder");
+      expect(data.shortComment).toContain("d7");
+    });
+  });
+
+  describe("/api/chesscom", () => {
+    it("validates missing username with 400", async () => {
+      const req = new NextRequest("http://localhost:3000/api/chesscom");
+      const res = await getChessCom(req);
+      expect(res.status).toBe(400);
+    });
+
+    it("returns profile and formatted recent games for a valid player", async () => {
+      globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+        const u = String(url);
+        if (u.endsWith("/player/hikaru")) {
+          return {
+            ok: true,
+            json: async () => ({ username: "Hikaru", title: "GM", status: "premium", followers: 1000 }),
+          } as Response;
+        }
+        if (u.endsWith("/games/archives")) {
+          return {
+            ok: true,
+            json: async () => ({
+              archives: ["https://api.chess.com/pub/player/hikaru/games/2026/11"],
+            }),
+          } as Response;
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            games: [
+              {
+                url: "https://chess.com/game/1",
+                pgn: "1. e4 e5 1-0",
+                time_control: "180",
+                end_time: 1700000000,
+                rated: true,
+                time_class: "blitz",
+                rules: "chess",
+                white: { username: "Hikaru", rating: 3250, result: "win" },
+                black: { username: "Rival", rating: 3100, result: "resigned" },
+              },
+            ],
+          }),
+        } as Response;
+      }) as unknown as typeof fetch;
+
+      const req = new NextRequest("http://localhost:3000/api/chesscom?username=hikaru&limit=5");
+      const res = await getChessCom(req);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.profile.username).toBe("Hikaru");
+      expect(data.games).toHaveLength(1);
+      expect(data.games[0].result).toBe("win");
+    });
+  });
+});

@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-charcoal: #312e2b;
+  --bg-panel: #262522;
+  --bg-surface: #21201d;
+  --border-subtle: #3d3b38;
+  --text-primary: #ffffff;
+  --text-muted: #9e9c98;
+  --sq-light: #eeeed2;
+  --sq-dark: #769656;
+}
+
+body {
+  background-color: var(--bg-charcoal);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom sleek dark scrollbar matching Chess.com */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #21201d;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4b4844;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #615e59;
+}

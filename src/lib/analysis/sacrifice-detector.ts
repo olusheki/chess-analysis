@@ -18,7 +18,6 @@ function staticExchangeOnSquare(
   targetSquare: Square,
   sideToCapture: "w" | "b"
 ): number {
-  const board = chess.board();
   const targetPiece = chess.get(targetSquare);
   if (!targetPiece || targetPiece.color === sideToCapture) return 0;
 
