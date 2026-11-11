@@ -1,8 +1,12 @@
 import {
   ChessEngine,
+  EngineSearchOptions,
   PositionEval,
   buildPositionEvalFromUciLines,
   evaluateTerminalPosition,
+  getGoCommand,
+  getStrengthKey,
+  getStrengthOptionCommands,
 } from "./engine-evaluator";
 
 /**
@@ -13,6 +17,7 @@ import {
 export function createBrowserStockfishEngine(): ChessEngine {
   let worker: Worker | null = null;
   let initialized = false;
+  let lastStrengthKey = "skill:20";
   let currentListeners: ((line: string) => void)[] = [];
   const pendingCleanups = new Set<(err: Error) => void>();
   let queue: Promise<void> = Promise.resolve();
@@ -118,7 +123,7 @@ export function createBrowserStockfishEngine(): ChessEngine {
     });
   }
 
-  async function initIfNeeded(multiPv: number) {
+  async function initIfNeeded(multiPv: number, options?: EngineSearchOptions) {
     if (!initialized) {
       const uciWait = waitForLine((l) => l === "uciok");
       post("uci");
@@ -130,6 +135,13 @@ export function createBrowserStockfishEngine(): ChessEngine {
       }
       initialized = true;
     }
+    const strengthKey = getStrengthKey(options?.limitElo);
+    if (strengthKey !== lastStrengthKey) {
+      for (const cmd of getStrengthOptionCommands(options?.limitElo)) {
+        post(cmd);
+      }
+      lastStrengthKey = strengthKey;
+    }
     post(`setoption name MultiPV value ${multiPv}`);
     const readyWait = waitForLine((l) => l === "readyok");
     post("isready");
@@ -137,13 +149,18 @@ export function createBrowserStockfishEngine(): ChessEngine {
   }
 
   return {
-    evaluatePosition(fen: string, depth: number, multiPv = 3): Promise<PositionEval> {
+    evaluatePosition(
+      fen: string,
+      depth: number,
+      multiPv = 3,
+      options?: EngineSearchOptions
+    ): Promise<PositionEval> {
       const terminal = evaluateTerminalPosition(fen);
       if (terminal) return Promise.resolve(terminal);
 
       const run = queue.then(async () => {
         if (disposed) throw makeAbortError("Engine disposed");
-        await initIfNeeded(multiPv);
+        await initIfNeeded(multiPv, options);
         const infoLines: string[] = [];
         const bestPromise = waitForLine(
           (l) => l.startsWith("bestmove "),
@@ -152,7 +169,7 @@ export function createBrowserStockfishEngine(): ChessEngine {
           }
         );
         post(`position fen ${fen}`);
-        post(`go depth ${depth}`);
+        post(getGoCommand(depth, options));
         const bestLine = await bestPromise;
         return buildPositionEvalFromUciLines(fen, infoLines, bestLine, depth);
       });

@@ -20,9 +20,100 @@ export interface PositionEval {
   lines: PvLine[];
 }
 
+export interface EngineSearchOptions {
+  /** Target ELO rating when running an interactive opponent move (tailored via UCI_LimitStrength / Skill Level). */
+  limitElo?: number;
+  /** Time budget in ms when playing interactively so UCI_LimitStrength calibrates strength realistically. */
+  moveTimeMs?: number;
+}
+
+export interface StrengthUciConfig {
+  useLimitStrength: boolean;
+  uciElo: number;
+  skillLevel: number;
+  recommendedDepth: number;
+}
+
 export interface ChessEngine {
-  evaluatePosition(fen: string, depth: number, multiPv?: number): Promise<PositionEval>;
+  evaluatePosition(
+    fen: string,
+    depth: number,
+    multiPv?: number,
+    options?: EngineSearchOptions
+  ): Promise<PositionEval>;
   dispose(): void;
+}
+
+/**
+ * Maps an optional target ELO rating into Stockfish 17.1 UCI strength parameters.
+ * Ratings >= 1320 use native UCI_LimitStrength + UCI_Elo (1320..3190).
+ * Sub-1320 ratings disable UCI_LimitStrength and scale Skill Level (0..5) + shallow depth.
+ */
+export function buildStrengthUciConfig(limitElo?: number): StrengthUciConfig {
+  if (limitElo === undefined || !Number.isFinite(limitElo)) {
+    return {
+      useLimitStrength: false,
+      uciElo: 1320,
+      skillLevel: 20,
+      recommendedDepth: 14,
+    };
+  }
+
+  const clampedElo = Math.max(400, Math.min(3190, Math.round(limitElo)));
+  if (clampedElo >= 1320) {
+    return {
+      useLimitStrength: true,
+      uciElo: clampedElo,
+      skillLevel: 20,
+      recommendedDepth: 10,
+    };
+  }
+
+  const ratio = (clampedElo - 400) / (1319 - 400);
+  const skillLevel = Math.max(0, Math.min(5, Math.round(ratio * 5)));
+  const recommendedDepth = Math.max(3, Math.min(7, Math.round(3 + ratio * 4)));
+  return {
+    useLimitStrength: false,
+    uciElo: 1320,
+    skillLevel,
+    recommendedDepth,
+  };
+}
+
+/**
+ * Returns a deterministic cache key representing the active UCI strength setting.
+ */
+export function getStrengthKey(limitElo?: number): string {
+  const cfg = buildStrengthUciConfig(limitElo);
+  return cfg.useLimitStrength ? `elo:${cfg.uciElo}` : `skill:${cfg.skillLevel}`;
+}
+
+/**
+ * Generates exact Stockfish UCI `setoption` commands needed for a given target ELO.
+ */
+export function getStrengthOptionCommands(limitElo?: number): string[] {
+  const cfg = buildStrengthUciConfig(limitElo);
+  if (cfg.useLimitStrength) {
+    return [
+      "setoption name UCI_LimitStrength value true",
+      `setoption name UCI_Elo value ${cfg.uciElo}`,
+      "setoption name Skill Level value 20",
+    ];
+  }
+  return [
+    "setoption name UCI_LimitStrength value false",
+    `setoption name Skill Level value ${cfg.skillLevel}`,
+  ];
+}
+
+/**
+ * Builds the Stockfish `go` search command from requested depth or movetime budget.
+ */
+export function getGoCommand(depth: number, options?: EngineSearchOptions): string {
+  if (options?.moveTimeMs !== undefined && Number.isFinite(options.moveTimeMs) && options.moveTimeMs > 0) {
+    return `go movetime ${Math.max(50, Math.round(options.moveTimeMs))}`;
+  }
+  return `go depth ${depth}`;
 }
 
 /**

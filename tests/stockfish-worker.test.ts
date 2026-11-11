@@ -183,4 +183,48 @@ describe("stockfish-worker (browser Web Worker lifecycle & cancellation)", () =>
     engine.dispose();
     vi.unstubAllEnvs();
   });
+
+  it("configures UCI_LimitStrength and movetime for ELO play and resets to full strength cleanly", async () => {
+    (globalThis as unknown as { window: { crossOriginIsolated: boolean } }).window = {
+      crossOriginIsolated: false,
+    };
+
+    const engine = createBrowserStockfishEngine();
+    const fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+    const limitedPromise = engine.evaluatePosition(fen, 10, 1, {
+      limitElo: 1500,
+      moveTimeMs: 220,
+    });
+    await Promise.resolve();
+
+    const w = MockWorker.instances[0];
+    w.emit("uciok");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(w.posted).toContain("setoption name UCI_LimitStrength value true");
+    expect(w.posted).toContain("setoption name UCI_Elo value 1500");
+
+    w.emit("readyok");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(w.posted).toContain("go movetime 220");
+    w.emit("info depth 8 multipv 1 score cp 20 pv g1f3\nbestmove g1f3");
+    await limitedPromise;
+
+    const fullPromise = engine.evaluatePosition(fen, 12, 3);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(w.posted).toContain("setoption name UCI_LimitStrength value false");
+    w.emit("readyok");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(w.posted).toContain("go depth 12");
+    w.emit("info depth 12 multipv 1 score cp 28 pv e2e4\nbestmove e2e4");
+    const full = await fullPromise;
+    expect(full.bestMoveUci).toBe("e2e4");
+
+    engine.dispose();
+  });
 });
