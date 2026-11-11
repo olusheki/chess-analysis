@@ -641,9 +641,9 @@ export default function GameReviewPage() {
       </header>
 
       {/* Main Two-Column Chess.com Workspace */}
-      <main className="mx-auto grid max-w-[1320px] grid-cols-1 gap-4 p-3 sm:p-4 lg:grid-cols-[minmax(0,1fr)_440px] lg:grid-rows-[minmax(0,1fr)_auto] lg:items-start lg:gap-x-5 lg:gap-y-3">
-        {/* Left/Center Column: Eval Bar + Player Bars + Chessboard */}
-        <section className="order-1 flex flex-col items-center lg:sticky lg:top-4 lg:col-start-1 lg:row-span-2 lg:row-start-1">
+      <main className="mx-auto grid max-w-[1320px] grid-cols-1 gap-4 p-3 sm:p-4 lg:grid-cols-[minmax(0,1fr)_440px] lg:items-start lg:gap-5">
+        {/* Left/Center Column: Eval Bar + Player Bars + Chessboard + Persistent Controls */}
+        <section className="flex flex-col items-center lg:sticky lg:top-4">
           <div className="w-full max-w-[640px]">
             {/* Top Player Plate */}
             <div className="mb-2 flex items-center justify-between gap-2 rounded bg-[#262522] px-3 py-1.5 text-xs">
@@ -778,11 +778,27 @@ export default function GameReviewPage() {
                 return null;
               })()}
             </div>
+
+            {analysis && (
+              <div className="mt-2.5 rounded-lg border border-[#3d3b38] bg-[#262522] p-2.5 shadow-xl">
+                <NavigationBar
+                  currentPly={currentPly}
+                  totalPlies={analysis.moves.length}
+                  hasKeyMoments={hasKeyMoments}
+                  onStart={goToStart}
+                  onPrev={prevMove}
+                  onNextKeyMoment={nextKeyMoment}
+                  onNext={nextMove}
+                  onEnd={goToEnd}
+                  onFlip={flipBoard}
+                />
+              </div>
+            )}
           </div>
         </section>
 
-        {/* Right Sidebar Scrollable Workspace */}
-        <aside className="order-3 flex min-w-0 flex-col gap-3 rounded-lg border border-[#3d3b38] bg-[#262522] p-3 shadow-2xl lg:col-start-2 lg:row-start-1">
+        {/* Right Sidebar Workspace */}
+        <aside className="flex min-w-0 flex-col gap-3 rounded-lg border border-[#3d3b38] bg-[#262522] p-3 shadow-2xl">
           {/* Progress / Error Banner */}
           {analysisStatus === "analyzing" && (
             <div className="rounded border border-[#96bc4b]/40 bg-[#21201d] p-3">
@@ -1116,23 +1132,6 @@ export default function GameReviewPage() {
             </div>
           )}
         </aside>
-
-        {/* Persistent Navigation Bar: right below board on mobile, pinned below sidebar on desktop */}
-        {analysis && (
-          <div className="order-2 rounded-lg border border-[#3d3b38] bg-[#262522] p-2.5 shadow-xl lg:sticky lg:bottom-3 lg:z-20 lg:col-start-2 lg:row-start-2">
-            <NavigationBar
-              currentPly={currentPly}
-              totalPlies={analysis.moves.length}
-              hasKeyMoments={hasKeyMoments}
-              onStart={goToStart}
-              onPrev={prevMove}
-              onNextKeyMoment={nextKeyMoment}
-              onNext={nextMove}
-              onEnd={goToEnd}
-              onFlip={flipBoard}
-            />
-          </div>
-        )}
       </main>
 
       {/* Game Loader Modal (stays mounted so UsernameImporter retains cached results across close/reopen) */}
