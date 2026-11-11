@@ -21,7 +21,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const coach = new GeminiCoachService();
+    const customApiKey = request.headers.get("x-gemini-api-key")?.trim();
+    const coach = new GeminiCoachService(customApiKey ? customApiKey : undefined);
 
     if (mode === "move") {
       const reqPayload = payload as Partial<CoachExplanationRequest>;

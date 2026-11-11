@@ -163,6 +163,34 @@ describe("Next.js API route handlers", () => {
         }),
       });
       expect((await postExplain(invalidCoachReq)).status).toBe(400);
+
+      // Optional whitespace x-gemini-api-key header gracefully falls back to offline coach without exposing header
+      const blankKeyReq = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        headers: { "x-gemini-api-key": "   " },
+        body: JSON.stringify({
+          mode: "move",
+          payload: {
+            moveSan: "Nf3",
+            playedBy: "White",
+            moveNumber: 2,
+            badge: "Good",
+            deltaWP: 1.5,
+            engineBestMove: "d4",
+            bestMovePV: ["d4"],
+            tacticalContext: {
+              tags: ["DEVELOPMENT"],
+              isCheck: false,
+              isCastle: false,
+              gamePhase: "Opening",
+            },
+          },
+        }),
+      });
+      const blankKeyRes = await postExplain(blankKeyReq);
+      expect(blankKeyRes.status).toBe(200);
+      const blankKeyData = await blankKeyRes.json();
+      expect(blankKeyData.coachMode).toBe("offline");
     });
   });
 

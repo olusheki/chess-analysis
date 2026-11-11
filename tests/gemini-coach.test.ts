@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Chess } from "chess.js";
 import { GeminiCoachService, validateExplanationGrounding } from "@/lib/ai/gemini-coach";
 import { COACH_PERSONAS, getCoachPersona } from "@/lib/ai/coach-personas";
 import type { MoveBadge } from "@/lib/analysis/move-classifier";
@@ -694,5 +695,75 @@ describe("gemini-coach & explainability grounding", () => {
     const sBlaze = await coach.generateGameStoryline({ ...baseStory, personaId: "drillmaster" });
     expect(new Set([sDanny.headline, sSage.headline, sBlaze.headline]).size).toBe(3);
     expect(new Set([sDanny.whiteTakeaway, sSage.whiteTakeaway, sBlaze.whiteTakeaway]).size).toBe(3);
+  });
+
+  it("enriches Gemini prompt with verified board inventory, comparative why-facts, and validates against bestMoveFenAfter", async () => {
+    const chess = new Chess("r1bqkbnr/ppp2ppp/2np4/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 4");
+    const fenBefore = chess.fen();
+    chess.move("a3");
+    const fenAfter = chess.fen();
+
+    const bestChess = new Chess(fenBefore);
+    bestChess.move("Bb5");
+    const bestMoveFenAfter = bestChess.fen();
+
+    mockGenerateContent.mockReset();
+    const onlineCoach = new GeminiCoachService("fake-test-key");
+    mockGenerateContent.mockResolvedValueOnce({
+      text: JSON.stringify({
+        badge: "Mistake",
+        shortComment: "Missed pinning the Knight.",
+        detailedExplanation:
+          "Playing Bb5 places the Bishop on b5 and pins the Knight on c6 against their King.",
+        bestMoveReasoning: "Developing with Bb5 keeps active central pressure.",
+        coachingTip: "Check pin diagonals before making a flank pawn move.",
+      }),
+    });
+
+    const liveRes = await onlineCoach.explainMove({
+      moveSan: "a3",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 4,
+      badge: "Mistake",
+      evalBefore: "+0.4",
+      evalAfter: "-0.3",
+      deltaWP: 9.2,
+      engineBestMove: "Bb5",
+      bestMovePV: ["Bb5", "a6", "Ba4"],
+      fenBefore,
+      fenAfter,
+      personaId: "sage",
+      tacticalContext: makeContext(),
+      coachInsights: {
+        playedSan: "a3",
+        bestMoveSan: "Bb5",
+        bestMoveFenAfter,
+        whyBetterFacts: ["Bb5 pins the Knight on c6 to the King on e8."],
+        strategicTradeoffs: ["Developing with Bb5 improves piece activity instead of a flank pawn move (a3)."],
+        missedOpportunities: ["Bb5 pins the Knight on c6 to the King on e8."],
+        bestPvIntentions: {
+          lineSan: ["Bb5", "a6", "Ba4"],
+          checksDelivered: 0,
+          capturedTargets: [],
+          castled: false,
+          promoted: false,
+          terminalCheckmate: false,
+          summaryFacts: ["Line applies lasting diagonal pressure against c6."],
+        },
+        boardPieceMapAfter: "White: K e1, B f1, P a3 | Black: K e8, N c6",
+      },
+    });
+
+    // Grounding should ACCEPT "Bishop on b5" because bestMoveFenAfter is in referenceFens
+    expect(liveRes.coachMode).toBe("live");
+    expect(liveRes.detailedExplanation).toContain("Bishop on b5");
+
+    // Verify prompt includes verified board map, comparative facts, and PV intentions
+    const sentPrompt = mockGenerateContent.mock.calls[0]?.[0]?.contents?.[0]?.parts?.[0]?.text ?? "";
+    expect(sentPrompt).toContain("Verified Board Pieces After Move:");
+    expect(sentPrompt).toContain("Comparative Chess Reasons");
+    expect(sentPrompt).toContain("Future Intentions Along Best Line:");
+    expect(sentPrompt).toContain("Grandmaster Sage");
   });
 });

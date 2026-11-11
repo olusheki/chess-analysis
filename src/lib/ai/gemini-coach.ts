@@ -6,6 +6,7 @@
 
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Chess, PieceSymbol, Square } from "chess.js";
+import { summarizePiecePlacements } from "../analysis/coach-insights";
 import { getCoachPersona } from "./coach-personas";
 import {
   buildOfflineGameStoryline,
@@ -144,25 +145,31 @@ export class GeminiCoachService {
     const oppSide = perspective === "White" ? "Black" : "White";
     const oppName = req.opponentName || "Your opponent";
 
+    const insights = req.coachInsights;
+    const boardMap =
+      insights?.boardPieceMapAfter ??
+      (req.fenAfter ? summarizePiecePlacements(req.fenAfter) : "");
+    const whyLines = insights?.whyBetterFacts?.length
+      ? insights.whyBetterFacts
+      : [...(insights?.missedOpportunities ?? []), ...(insights?.strategicTradeoffs ?? [])];
+    const bestFuture = insights?.bestPvIntentions?.summaryFacts ?? [];
+    const replyFuture = insights?.refutationPvIntentions?.summaryFacts ?? [];
+    const bestTags = insights?.bestMoveTactics?.tags?.join(", ") || "";
+
     const systemPrompt = `
 You are "${persona.name}" (${persona.title}), inspired by Chess.com's Game Review coach.
 Voice & Style: ${persona.systemTone}
+Persona Identity Tagline: ${persona.tagline}
 
 Single-Side Perspective Rule:
 - You are coaching EXCLUSIVELY ${perspective} (${req.playerName || perspective}). Always address ${perspective} as "You" / "Your".
 - Refer to ${oppSide} (${oppName}) strictly in the 3rd person ("${oppName}" / "Your opponent") — NEVER congratulate the opponent as "You" or blame the student for an opponent's blunder.
 ${isPlayerMove ? `- This move was played by YOU (${perspective}). Critique or praise your choice, and show how the opponent can respond or punish errors.` : `- This move was played by YOUR OPPONENT (${req.playedBy}, ${oppName}). Explain what threats ${oppName} creates against you, or what tactical opportunity ${oppName}'s error opens for you.`}
 
-Strict Grounding Rules:
-1. Ground your explanation STRICTLY in the provided Engine Evaluation, Tactical Tags, Best PV, and Punishment/Reply PV. NEVER invent piece placements or legal moves.
-2. If the move is a Blunder, Mistake, or Miss:
-   - State explicitly what was hung, missed, or conceded using only provided tags/lines.
-   - Cite concrete moves from the PV/refutation line when helpful.
-3. If the move is Developing or Generic:
-   - Explain its positional virtue or what to prepare in reply.
-4. If the move is Brilliant (!!):
-   - Celebrate the sound sacrifice and explain its attacking compensation.
-5. Keep shortComment under 15 words and detailedExplanation to 2-3 concise sentences.
+Pedagogical "Why" & Grounding Rules:
+1. Teach chess reasoning: explain WHY the engine's top choice outperforms the played move (e.g., attacking actively instead of retreating passively, developing minor pieces before castling or pushing flank pawns, exploiting a pin/fork/skewer/hanging piece, avoiding pawn-structure defects, or pursuing the future PV plan).
+2. Ground every square and piece claim STRICTLY in the provided Board Inventory, Comparative Reasoning, Tactical Tags, Best PV, and Punishment/Reply PV. NEVER invent pieces or squares that are absent from the verified board data.
+3. Keep shortComment punchy (under 15 words) in ${persona.name}'s distinct voice, detailedExplanation to 2-3 rich instructive sentences, bestMoveReasoning clearly explaining why ${req.engineBestMove} is better (if played != best), and coachingTip as 1 actionable chess principle tailored to this position.
 `;
 
     const userPrompt = `
@@ -172,7 +179,7 @@ Analyze this move from ${perspective}'s coaching corner:
 - Assigned Rating: ${req.badge}
 - Evaluation Before: ${req.evalBefore} -> Evaluation After: ${req.evalAfter} (ΔWP: ${req.deltaWP.toFixed(1)}%)
 - Opening: ${req.openingName || "Standard Opening"}
-- Tactical Tags: ${req.tacticalContext.tags.join(", ") || "None"}
+- Played Move Tactical Tags: ${req.tacticalContext.tags.join(", ") || "None"}
 ${req.tacticalContext.hangingPieceDetails ? `- ${req.badge === "Brilliant" ? "SACRIFICED PIECE" : "HUNG PIECE"}: ${req.tacticalContext.hangingPieceDetails.piece} on ${req.tacticalContext.hangingPieceDetails.square}` : ""}
 ${req.tacticalContext.forkTargets ? `- FORK TARGETS: ${req.tacticalContext.forkTargets.map((t) => `${t.piece} on ${t.square}`).join(", ")}` : ""}
 ${req.tacticalContext.pinnedPieceDetails ? `- PINNED PIECE: ${req.tacticalContext.pinnedPieceDetails.piece} on ${req.tacticalContext.pinnedPieceDetails.square} pinned to ${req.tacticalContext.pinnedPieceDetails.pinnedTo}` : ""}
@@ -180,6 +187,11 @@ ${req.tacticalContext.skeweredPieceDetails ? `- SKEWER: ${req.tacticalContext.sk
 - Mover's Engine Best Move: ${req.engineBestMove}
 - Mover's Best PV Line: ${req.bestMovePV.slice(0, 4).join(" ")}
 ${req.refutationPV && req.refutationPV.length > 0 ? `- Next Reply / Punishment Line (${isPlayerMove ? oppName : "Your Reply"}): ${req.refutationPV.slice(0, 4).join(" ")}` : ""}
+${boardMap ? `- Verified Board Pieces After Move: ${boardMap}` : ""}
+${bestTags ? `- Best Move Tactical Tags: ${bestTags}` : ""}
+${whyLines.length > 0 ? `- Comparative Chess Reasons ("Why Better"): ${whyLines.join(" | ")}` : ""}
+${bestFuture.length > 0 ? `- Future Intentions Along Best Line: ${bestFuture.join(" | ")}` : ""}
+${replyFuture.length > 0 ? `- Future Intentions Along Reply/Punishment Line: ${replyFuture.join(" | ")}` : ""}
 `;
 
     try {
@@ -194,9 +206,11 @@ ${req.refutationPV && req.refutationPV.length > 0 ? `- Next Reply / Punishment L
       });
 
       const parsed: CoachExplanationResponse = JSON.parse(response.text!);
-      const referenceFens = [req.fenAfter, req.fenBefore].filter(
-        (f): f is string => Boolean(f)
-      );
+      const referenceFens = [
+        req.fenAfter,
+        req.fenBefore,
+        insights?.bestMoveFenAfter,
+      ].filter((f): f is string => Boolean(f));
       if (referenceFens.length > 0) {
         const fullText = [
           parsed.shortComment,
