@@ -221,7 +221,7 @@ export function PlayModePanel({
             aria-label="Stockfish target ELO"
             min={PLAY_MIN_ELO}
             max={PLAY_MAX_ELO}
-            step={25}
+            step={1}
             value={playMode.targetElo}
             onChange={(e) => onSetTargetElo(Number(e.target.value))}
             className="w-full accent-[#96bc4b]"
