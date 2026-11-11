@@ -170,10 +170,15 @@ describe("useReviewStore (Zustand reactive review state)", () => {
     useReviewStore.getState().flipBoard();
     expect(useReviewStore.getState().boardFlipped).toBe(true);
 
+    // Toggling Show Best Move ON auto-steps preview index to 1 so the best move immediately plays on board
     useReviewStore.getState().toggleShowBestMove();
     expect(useReviewStore.getState().showBestMove).toBe(true);
-    useReviewStore.getState().stepBestMoveLine(1);
     expect(useReviewStore.getState().bestMovePreviewIndex).toBe(1);
+    useReviewStore.getState().stepBestMoveLine(1);
+    expect(useReviewStore.getState().bestMovePreviewIndex).toBe(2);
+    useReviewStore.getState().toggleShowBestMove();
+    expect(useReviewStore.getState().showBestMove).toBe(false);
+    expect(useReviewStore.getState().bestMovePreviewIndex).toBe(0);
   });
 
   it("supports interactive Retry Blunder puzzle mode and evaluates user attempts", () => {
@@ -279,6 +284,18 @@ describe("useReviewStore (Zustand reactive review state)", () => {
     // Switching persona clears cached move explanations & storyline
     store.setPersonaId("sage");
     expect(useReviewStore.getState().personaId).toBe("sage");
+    expect(useReviewStore.getState().explanations).toEqual({});
+    expect(useReviewStore.getState().storyline).toBeNull();
+
+    // Switching coachColor defaults to white, switches cleanly, and clears cached commentary
+    expect(useReviewStore.getState().coachColor).toBe("white");
+    store.setExplanation(4, {
+      badge: "Blunder",
+      shortComment: "Blunder!",
+      detailedExplanation: "Dropped the king safety.",
+    });
+    store.setCoachColor("black");
+    expect(useReviewStore.getState().coachColor).toBe("black");
     expect(useReviewStore.getState().explanations).toEqual({});
     expect(useReviewStore.getState().storyline).toBeNull();
 

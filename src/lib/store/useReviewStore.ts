@@ -30,6 +30,7 @@ export interface ReviewStoreState {
   boardFlipped: boolean;
   showBestMove: boolean;
   bestMovePreviewIndex: number; // 0..bestMovePvSan.length
+  coachColor: "white" | "black";
   personaId: CoachPersonaId;
   explanations: Record<number, CoachExplanationResponse>;
   storyline: GameStorylineResponse | null;
@@ -39,6 +40,7 @@ export interface ReviewStoreState {
   setAnalyzing: (completed?: number, total?: number) => void;
   setAnalysisError: (message: string) => void;
   setAnalysis: (analysis: GameAnalysis) => void;
+  setCoachColor: (color: "white" | "black") => void;
   setPersonaId: (personaId: CoachPersonaId) => void;
   setExplanation: (ply: number, explanation: CoachExplanationResponse) => void;
   setStoryline: (storyline: GameStorylineResponse) => void;
@@ -86,6 +88,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   boardFlipped: false,
   showBestMove: false,
   bestMovePreviewIndex: 0,
+  coachColor: "white",
   personaId: "danny",
   explanations: {},
   storyline: null,
@@ -119,6 +122,8 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       storyline: null,
       retryState: INITIAL_RETRY_STATE,
     }),
+
+  setCoachColor: (coachColor) => set({ coachColor, explanations: {}, storyline: null }),
 
   setPersonaId: (personaId) => set({ personaId, explanations: {}, storyline: null }),
 
@@ -180,10 +185,15 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   flipBoard: () => set((state) => ({ boardFlipped: !state.boardFlipped })),
 
   toggleShowBestMove: () =>
-    set((state) => ({
-      showBestMove: !state.showBestMove,
-      bestMovePreviewIndex: 0,
-    })),
+    set((state) => {
+      const nextShow = !state.showBestMove;
+      const move = getActiveMove(state.analysis, state.currentPly);
+      const maxSteps = move ? Math.min(6, move.bestMovePvSan.length) : 0;
+      return {
+        showBestMove: nextShow,
+        bestMovePreviewIndex: nextShow && maxSteps > 0 ? 1 : 0,
+      };
+    }),
 
   stepBestMoveLine: (delta) =>
     set((state) => {
@@ -286,6 +296,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       boardFlipped: false,
       showBestMove: false,
       bestMovePreviewIndex: 0,
+      coachColor: "white",
       explanations: {},
       storyline: null,
       retryState: INITIAL_RETRY_STATE,

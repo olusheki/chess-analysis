@@ -35,7 +35,10 @@ export async function POST(request: NextRequest) {
         !Number.isFinite(reqPayload.deltaWP) ||
         !reqPayload.tacticalContext ||
         typeof reqPayload.tacticalContext !== "object" ||
-        !Array.isArray(reqPayload.tacticalContext.tags)
+        !Array.isArray(reqPayload.tacticalContext.tags) ||
+        (reqPayload.coachFor !== undefined &&
+          reqPayload.coachFor !== "White" &&
+          reqPayload.coachFor !== "Black")
       ) {
         return NextResponse.json(
           { error: "Missing or invalid move explanation fields." },
@@ -58,7 +61,10 @@ export async function POST(request: NextRequest) {
         !reqPayload.phaseAccuracies ||
         !reqPayload.phaseAccuracies.opening ||
         !reqPayload.phaseAccuracies.middlegame ||
-        !reqPayload.phaseAccuracies.endgame
+        !reqPayload.phaseAccuracies.endgame ||
+        (reqPayload.coachFor !== undefined &&
+          reqPayload.coachFor !== "White" &&
+          reqPayload.coachFor !== "Black")
       ) {
         return NextResponse.json(
           { error: "Missing required game storyline fields." },

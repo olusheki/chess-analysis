@@ -145,6 +145,24 @@ describe("Next.js API route handlers", () => {
       const data = await res.json();
       expect(data.badge).toBe("Blunder");
       expect(data.shortComment).toContain("d7");
+      expect(data.coachMode).toBe("offline");
+
+      // Invalid coachFor returns 400
+      const invalidCoachReq = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "move",
+          payload: {
+            moveSan: "e4",
+            playedBy: "White",
+            coachFor: "Green",
+            badge: "Best",
+            deltaWP: 0,
+            tacticalContext: { tags: [], isCheck: false, isCastle: false, gamePhase: "Opening" },
+          },
+        }),
+      });
+      expect((await postExplain(invalidCoachReq)).status).toBe(400);
     });
   });
 

@@ -469,4 +469,97 @@ describe("gemini-coach & explainability grounding", () => {
       hallucinations: [],
     });
   });
+
+  it("coaches strictly from single-player perspective (coachFor), differentiates offline personas, cites refutationPV, and formats empty phases cleanly", async () => {
+    // 1) Coaching White when Black blunders: speak to White about opponent mistake + White's reply
+    const oppBlunder = await coach.explainMove({
+      moveSan: "g5",
+      playedBy: "Black",
+      coachFor: "White",
+      playerName: "olusheki",
+      opponentName: "trocaderooo",
+      moveNumber: 12,
+      badge: "Blunder",
+      evalBefore: "+0.2",
+      evalAfter: "+4.1",
+      deltaWP: 41.0,
+      engineBestMove: "Nf6",
+      bestMovePV: ["Nf6", "d4"],
+      refutationPV: ["Nxg5", "Nh6", "Qh5"],
+      tacticalContext: makeContext({
+        tags: ["CHECKMATE_THREAT"],
+      }),
+    });
+    expect(oppBlunder.coachMode).toBe("offline");
+    expect(oppBlunder.shortComment.toLowerCase()).toMatch(/trocaderooo|opponent/);
+    expect(oppBlunder.shortComment.toLowerCase()).not.toContain("you left");
+    expect(oppBlunder.detailedExplanation).toContain("Nxg5");
+
+    // 2) Coaching White when Black makes a strong Best move: describe opponent move in 3rd person & player threat/reply
+    const oppBest = await coach.explainMove({
+      moveSan: "Nc6",
+      playedBy: "Black",
+      coachFor: "White",
+      opponentName: "trocaderooo",
+      moveNumber: 4,
+      badge: "Best",
+      evalBefore: "+0.2",
+      evalAfter: "+0.2",
+      deltaWP: 0,
+      engineBestMove: "Nc6",
+      bestMovePV: ["Nc6", "Bb5"],
+      refutationPV: ["Bb5", "a6"],
+      tacticalContext: makeContext({ tags: ["DEVELOPMENT"] }),
+    });
+    expect(oppBest.shortComment.toLowerCase()).toMatch(/trocaderooo|opponent/);
+    expect(oppBest.detailedExplanation).toContain("Bb5");
+
+    // 3) Offline personas (danny vs sage vs drillmaster) produce distinct commentary
+    const baseBlunder = {
+      moveSan: "Qh5",
+      playedBy: "White" as const,
+      coachFor: "White" as const,
+      moveNumber: 8,
+      badge: "Blunder" as const,
+      evalBefore: "+0.4",
+      evalAfter: "-3.1",
+      deltaWP: 38.0,
+      engineBestMove: "Nf3",
+      bestMovePV: ["Nf3", "d6"],
+      refutationPV: ["g6", "Qe2"],
+      tacticalContext: makeContext(),
+    };
+    const dannyOut = await coach.explainMove({ ...baseBlunder, personaId: "danny" });
+    const sageOut = await coach.explainMove({ ...baseBlunder, personaId: "sage" });
+    const blazeOut = await coach.explainMove({ ...baseBlunder, personaId: "drillmaster" });
+    expect(new Set([dannyOut.detailedExplanation, sageOut.detailedExplanation, blazeOut.detailedExplanation]).size).toBe(3);
+    expect(dannyOut.detailedExplanation).toContain("g6");
+
+    // 4) Storyline formats empty endgame moves as N/A instead of 100%/100%
+    const noEndgameStory = await coach.generateGameStoryline({
+      whiteName: "olusheki",
+      blackName: "pistapoc",
+      result: "1-0",
+      openingName: "Queen's Pawn",
+      whiteAccuracy: 74.2,
+      blackAccuracy: 51.0,
+      whiteElo: 700,
+      blackElo: 450,
+      coachFor: "White",
+      phaseAccuracies: {
+        opening: { white: 82, black: 65 },
+        middlegame: { white: 71, black: 44 },
+        endgame: { white: 100, black: 100 },
+      },
+      phaseMoveCounts: {
+        opening: { white: 6, black: 6 },
+        middlegame: { white: 14, black: 14 },
+        endgame: { white: 0, black: 0 },
+      },
+      keyMomentCount: 4,
+    });
+    expect(noEndgameStory.coachMode).toBe("offline");
+    expect(noEndgameStory.summary).toContain("Endgame N/A");
+    expect(noEndgameStory.summary).not.toContain("Endgame 100%/100%");
+  });
 });
