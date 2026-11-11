@@ -10,6 +10,7 @@ import { NavigationBar } from "@/components/review/NavigationBar";
 import { AccuracyHeader } from "@/components/review/AccuracyHeader";
 import { MoveBadgeSummary } from "@/components/review/MoveBadgeSummary";
 import { CoachCard } from "@/components/review/CoachCard";
+import { CoachAvatar } from "@/components/review/CoachAvatar";
 import { MoveListReview } from "@/components/review/MoveListReview";
 import { UsernameImporter } from "@/components/importer/UsernameImporter";
 import { GameSelectionList } from "@/components/importer/GameSelectionList";
@@ -759,6 +760,127 @@ describe("UI components & visual geometry", () => {
       await screen.findByText(/OpponentX/i);
       expect(urls.every((u) => u.startsWith("https://api.chess.com/pub/"))).toBe(true);
       expect(urls.some((u) => u.includes("/api/chesscom"))).toBe(false);
+    });
+
+    it("CoachCard labels Show Best Move PV header accurately by error state and perspective", () => {
+      const baseProps = {
+        personaId: "danny" as const,
+        coachColor: "white" as const,
+        plainEnglish: false,
+        moveNumber: 12,
+        bestMovePvSan: ["Nf6", "d4", "exd4"],
+        retryState: {
+          active: false,
+          ply: null,
+          fen: null,
+          targetUci: null,
+          targetSan: null,
+          status: "idle" as const,
+          feedback: null,
+          attempts: 0,
+        },
+        showBestMove: true,
+        bestMovePreviewIndex: 0,
+        onStartRetry: vi.fn(),
+        onExitRetry: vi.fn(),
+        onToggleBestMove: vi.fn(),
+        onStepBestMove: vi.fn(),
+      };
+
+      const { rerender } = render(
+        <CoachCard
+          {...baseProps}
+          playedBy="White"
+          moveSan="Qh5"
+          badge="Blunder"
+          bestMoveSan="Nf6"
+          explanation={{
+            badge: "Blunder",
+            shortComment: "Qh5 leaves f2 open.",
+            detailedExplanation: "White loses control of f2.",
+            variationTitle: "Punishment Line",
+          }}
+        />
+      );
+      expect(screen.getByText("Best Move Continuation")).toBeInTheDocument();
+      expect(screen.queryByText("Punishment Line")).not.toBeInTheDocument();
+
+      rerender(
+        <CoachCard
+          {...baseProps}
+          playedBy="Black"
+          moveSan="g5"
+          badge="Blunder"
+          bestMoveSan="Nf6"
+          explanation={{
+            badge: "Blunder",
+            shortComment: "Black weakened the kingside.",
+            detailedExplanation: "Black could have played Nf6.",
+            variationTitle: "Your Opportunity to Strike",
+          }}
+        />
+      );
+      expect(screen.getByText("Best Move Continuation")).toBeInTheDocument();
+      expect(screen.queryByText("Your Opportunity to Strike")).not.toBeInTheDocument();
+
+      rerender(
+        <CoachCard
+          {...baseProps}
+          playedBy="Black"
+          moveSan="Nf6"
+          badge="Best"
+          bestMoveSan="Nf6"
+          explanation={{
+            badge: "Best",
+            shortComment: "Black develops cleanly.",
+            detailedExplanation: "Standard knight development.",
+            variationTitle: "Engine Line",
+          }}
+        />
+      );
+      expect(screen.getByText("Opponent's Best Continuation")).toBeInTheDocument();
+      expect(screen.queryByText("Engine Line")).not.toBeInTheDocument();
+
+      rerender(
+        <CoachCard
+          {...baseProps}
+          playedBy="White"
+          moveSan="Bxh7+"
+          badge="Brilliant"
+          bestMoveSan="Bxh7+"
+          explanation={{
+            badge: "Brilliant",
+            shortComment: "A classic Greek Gift sacrifice!",
+            detailedExplanation: "White exposes the Black king.",
+            variationTitle: "Brilliant Continuation",
+          }}
+        />
+      );
+      expect(screen.getByText("Brilliant Continuation")).toBeInTheDocument();
+    });
+  });
+
+  describe("CoachAvatar bespoke character portraits", () => {
+    it("renders visually distinct character SVGs for Danny, Sage, and Blaze", () => {
+      const { container, rerender } = render(
+        <CoachAvatar personaId="danny" color="#96bc4b" size="md" />
+      );
+      expect(container.querySelector('[data-coach-avatar="danny"]')).toBeInTheDocument();
+      const dannySvg = container.querySelector('[data-portrait="danny"]')?.innerHTML;
+      expect(dannySvg).toBeTruthy();
+
+      rerender(<CoachAvatar personaId="sage" color="#5c8bb0" size="md" />);
+      expect(container.querySelector('[data-coach-avatar="sage"]')).toBeInTheDocument();
+      const sageSvg = container.querySelector('[data-portrait="sage"]')?.innerHTML;
+      expect(sageSvg).toBeTruthy();
+
+      rerender(<CoachAvatar personaId="drillmaster" color="#e58f2a" size="lg" />);
+      expect(container.querySelector('[data-coach-avatar="drillmaster"]')).toBeInTheDocument();
+      const blazeSvg = container.querySelector('[data-portrait="drillmaster"]')?.innerHTML;
+      expect(blazeSvg).toBeTruthy();
+
+      // Confirm each coach renders genuinely different portrait paths/features
+      expect(new Set([dannySvg, sageSvg, blazeSvg]).size).toBe(3);
     });
   });
 });
