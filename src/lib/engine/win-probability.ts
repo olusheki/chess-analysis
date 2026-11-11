@@ -60,7 +60,21 @@ export function calculateWinProbabilityDelta(
     return { wpBest, wpPlayed, deltaWP: 0 };
   }
 
-  const deltaWP = Math.max(0, wpBest - wpPlayed);
+  let deltaWP = Math.max(0, wpBest - wpPlayed);
+
+  // Penalize missing an immediate forced mate (M1..M3) when settling for a significantly longer mate or non-mate line
+  if (
+    mateBest !== undefined &&
+    mateBest > 0 &&
+    mateBest <= 3 &&
+    (matePlayed === undefined || matePlayed <= 0 || matePlayed > mateBest + 3)
+  ) {
+    const delayPenalty =
+      matePlayed === undefined || matePlayed <= 0
+        ? 12.5
+        : Math.min(12.5, (matePlayed - mateBest) * 1.8);
+    deltaWP = Math.max(deltaWP, delayPenalty);
+  }
 
   return { wpBest, wpPlayed, deltaWP };
 }
@@ -77,7 +91,8 @@ export function calculateMoveAccuracy(deltaWP: number): number {
 
 /**
  * Computes overall game accuracy across all evaluated moves.
- * Moves made in critical/unbalanced positions carry higher weight.
+ * Moves made in critical/competitive (~50% WP) positions carry higher weight,
+ * damped in decided (>95%/<5%) positions and blended with floored harmonic mean.
  */
 export function calculateOverallGameAccuracy(
   moves: { deltaWP: number; wpBest: number; isBook?: boolean; isForced?: boolean }[]
@@ -87,26 +102,62 @@ export function calculateOverallGameAccuracy(
 
   let totalWeightedAccuracy = 0;
   let totalWeight = 0;
+  let invSum = 0;
 
   for (const move of nonTrivialMoves) {
-    // Weight increases in high-stakes positions (closer to equality/slight advantage)
-    const leverageWeight = 1.0 + Math.abs((move.wpBest - 50) / 50);
+    const competitiveness = 1.0 - Math.abs((move.wpBest - 50) / 50);
+    const leverageWeight = 0.25 + 1.5 * Math.pow(Math.max(0, competitiveness), 1.5);
     const moveAccuracy = calculateMoveAccuracy(move.deltaWP);
 
     totalWeightedAccuracy += moveAccuracy * leverageWeight;
     totalWeight += leverageWeight;
+    invSum += 1 / Math.max(2.0, moveAccuracy);
   }
 
-  return parseFloat((totalWeightedAccuracy / totalWeight).toFixed(1));
+  const weightedCompMean = totalWeightedAccuracy / totalWeight;
+  const harmonicMean = nonTrivialMoves.length / invSum;
+  const blended = (weightedCompMean + harmonicMean) / 2;
+
+  return parseFloat(Math.min(100, Math.max(0, blended)).toFixed(1));
+}
+
+export interface PerformanceRatingContext {
+  playerElo?: number;
+  opponentElo?: number;
+  resultScore?: number; // 1 = win, 0.5 = draw, 0 = loss
 }
 
 /**
- * Estimated Performance Rating (Elo) based on CAPS2 accuracy and game length
+ * Estimated Performance Rating (Elo) based on CAPS2 accuracy, blunders/mistakes,
+ * and anchored to PGN player/opponent Elo ratings when available.
  */
-export function estimatePerformanceRating(accuracy: number, blunders: number, mistakes: number): number {
-  // Base calibration curve
-  const baseElo = 600 + (accuracy * 22.5);
-  const penalty = (blunders * 90) + (mistakes * 35);
-  const estimated = Math.max(400, Math.min(2900, Math.round(baseElo - penalty)));
+export function estimatePerformanceRating(
+  accuracy: number,
+  blunders: number,
+  mistakes: number,
+  context?: PerformanceRatingContext
+): number {
+  const playerElo =
+    context?.playerElo && context.playerElo > 0 ? context.playerElo : undefined;
+  const opponentElo =
+    context?.opponentElo && context.opponentElo > 0 ? context.opponentElo : undefined;
+
+  if (playerElo !== undefined || opponentElo !== undefined) {
+    const anchor =
+      playerElo !== undefined && opponentElo !== undefined
+        ? (playerElo + opponentElo) / 2
+        : (opponentElo ?? playerElo)!;
+    const expectedAcc = Math.min(92, Math.max(38, 36 + anchor / 38));
+    const resultAdjustment =
+      context?.resultScore !== undefined ? (context.resultScore - 0.5) * 100 : 0;
+    const rawDelta =
+      (accuracy - expectedAcc) * 12 - blunders * 40 - mistakes * 16 + resultAdjustment;
+    const clampedDelta = Math.max(-450, Math.min(650, rawDelta));
+    return Math.max(100, Math.min(3200, Math.round(anchor + clampedDelta)));
+  }
+
+  const baseElo = 200 + accuracy * 26.5;
+  const penalty = blunders * 110 + mistakes * 40;
+  const estimated = Math.max(100, Math.min(2900, Math.round(baseElo - penalty)));
   return estimated;
 }

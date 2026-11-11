@@ -106,4 +106,30 @@ describe("opening-book (ECO classifier & transposition matcher)", () => {
     expect(out.outOfBookMoveNumber).toBe(3);
     expect(out.plyIsBook).toEqual([true, true, true, true, false]);
   });
+
+  it("preserves Alekhine identity over Omega Gambit collision and recovers French transpositions after intermediate non-book moves", () => {
+    // 1. e4 Nf6 2. d4 Nxe4 must preserve Alekhine Defense (B02), whereas 1. d4 Nf6 2. e4 Nxe4 is Indian Defense: Omega Gambit (A45)
+    const alekhine = classifyGameOpenings(["e4", "Nf6", "d4", "Nxe4"]);
+    expect(alekhine.opening?.eco).toBe("B02");
+    expect(alekhine.opening?.name).toContain("Alekhine");
+    expect(alekhine.bookPlies).toBe(4);
+
+    const omega = classifyGameOpenings(["d4", "Nf6", "e4", "Nxe4"]);
+    expect(omega.opening?.eco).toBe("A45");
+
+    // 1. d4 d5 2. Nf3 Nc6 3. Nc3 (exits book at ply 5) 3...e6 4. e4 Nf6 (transposes back into French C10)
+    const frenchTransposition = classifyGameOpenings([
+      "d4",
+      "d5",
+      "Nf3",
+      "Nc6",
+      "Nc3",
+      "e6",
+      "e4",
+      "Nf6",
+    ]);
+    expect(frenchTransposition.opening?.eco).toBe("C10");
+    expect(frenchTransposition.opening?.name).toContain("French");
+    expect(frenchTransposition.outOfBookPly).toBe(5);
+  });
 });

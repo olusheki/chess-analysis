@@ -115,29 +115,64 @@ describe("win-probability engine math", () => {
       expect(acc).toBe(100.0);
     });
 
-    it("weights moves by position leverage (|wpBest - 50| / 50 + 1)", () => {
-      const equalAcc = calculateMoveAccuracy(10); // weight 1.0 (wpBest=50)
-      const winningAcc = calculateMoveAccuracy(0); // weight 2.0 (wpBest=100)
-      const expected = parseFloat(((equalAcc * 1.0 + winningAcc * 2.0) / 3.0).toFixed(1));
-      const actual = calculateOverallGameAccuracy([
-        { deltaWP: 10, wpBest: 50 },
-        { deltaWP: 0, wpBest: 100 },
+    it("weights critical balanced positions higher than decided positions and penalizes blunders via harmonic blend", () => {
+      // Critical position error (wpBest=50) lowers accuracy more than an identical deltaWP in a decided (wpBest=100) position
+      const criticalErr = calculateOverallGameAccuracy([
+        { deltaWP: 15, wpBest: 50 },
+        { deltaWP: 0, wpBest: 99 },
       ]);
-      expect(actual).toBe(expected);
+      const garbageErr = calculateOverallGameAccuracy([
+        { deltaWP: 15, wpBest: 99 },
+        { deltaWP: 0, wpBest: 50 },
+      ]);
+      expect(criticalErr).toBeLessThan(garbageErr);
+
+      // One severe blunder alongside routine optimal moves pulls overall accuracy well below 80%
+      const withOneBlunder = calculateOverallGameAccuracy([
+        { deltaWP: 60, wpBest: 50 },
+        ...Array.from({ length: 9 }, () => ({ deltaWP: 0, wpBest: 50 })),
+      ]);
+      expect(withOneBlunder).toBeLessThan(70);
+      expect(withOneBlunder).toBeGreaterThan(20);
+    });
+
+    it("penalizes delaying immediate forced mate (e.g. missing M1 and settling for M8)", () => {
+      const m1ToM8 = calculateWinProbabilityDelta(10000, 10000, 1, 8);
+      expect(m1ToM8.deltaWP).toBeGreaterThanOrEqual(7.0);
+      expect(calculateMoveAccuracy(m1ToM8.deltaWP)).toBeLessThan(80.0);
+
+      // Minor mate-length variation (+M2 -> +M3) remains nearly free
+      const m2ToM3 = calculateWinProbabilityDelta(10000, 10000, 2, 3);
+      expect(m2ToM3.deltaWP).toBeLessThanOrEqual(1.0);
     });
   });
 
   describe("estimatePerformanceRating", () => {
-    it("scales with accuracy and penalizes blunders and mistakes", () => {
+    it("scales with accuracy, penalizes blunders and mistakes, and widens beginner fallback floor to 100", () => {
       const high = estimatePerformanceRating(95, 0, 0);
       const withErrors = estimatePerformanceRating(95, 2, 3);
-      expect(high).toBe(Math.round(600 + 95 * 22.5));
-      expect(withErrors).toBe(high - 2 * 90 - 3 * 35);
+      expect(high).toBe(Math.round(200 + 95 * 26.5));
+      expect(withErrors).toBeLessThan(high);
+      expect(estimatePerformanceRating(0, 10, 10)).toBe(100);
+      expect(estimatePerformanceRating(100, 0, 0)).toBe(2850);
     });
 
-    it("clamps estimated rating between 400 and 2900", () => {
-      expect(estimatePerformanceRating(0, 10, 10)).toBe(400);
-      expect(estimatePerformanceRating(100, 0, 0)).toBe(2850);
+    it("anchors game rating to PGN WhiteElo/BlackElo when available", () => {
+      const lowRatedWin = estimatePerformanceRating(87.7, 0, 1, {
+        playerElo: 800,
+        opponentElo: 400,
+        resultScore: 1,
+      });
+      expect(lowRatedWin).toBeGreaterThanOrEqual(750);
+      expect(lowRatedWin).toBeLessThan(1500);
+
+      const weakGame = estimatePerformanceRating(25, 5, 2, {
+        playerElo: 195,
+        opponentElo: 197,
+        resultScore: 0,
+      });
+      expect(weakGame).toBeLessThan(400);
+      expect(weakGame).toBeGreaterThanOrEqual(100);
     });
 
     it("handles mate === 0 fallback, very deep mates (-M25 / +M25), and boundary move accuracy", () => {

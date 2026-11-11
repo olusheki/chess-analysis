@@ -32,6 +32,8 @@ export interface MoveClassificationInput {
   prevMoveOpponentDeltaWP?: number; // Previous move delta WP (to detect missed wins)
   materialSacrificed: number;      // Net points of material sacrificed (e.g. piece given up without immediate recapture)
   isBestMove: boolean;             // Whether move matches PV1
+  isRecapture?: boolean;           // Capturing back on the square opponent just captured on
+  isKingCheckEscape?: boolean;     // King moving to escape check (not a creative sacrifice)
 }
 
 export interface ClassificationResult {
@@ -71,6 +73,8 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
     prevMoveOpponentDeltaWP,
     materialSacrificed,
     isBestMove,
+    isRecapture = false,
+    isKingCheckEscape = false,
   } = input;
 
   // 1. Book Move Check (Opening Database match)
@@ -101,17 +105,28 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
     mateBest === undefined && matePlayed === undefined ? Math.max(0, cpBest - cpPlayed) : 0;
   const lostMate =
     mateBest !== undefined && mateBest > 0 && (matePlayed === undefined || matePlayed <= 0);
+  const worsenedMate =
+    mateBest !== undefined &&
+    mateBest > 0 &&
+    (matePlayed === undefined || matePlayed <= 0 || matePlayed > mateBest);
+  const isMopUp =
+    cpBest >= 650 &&
+    (mateBest === undefined || mateBest <= 0) &&
+    cpPV2 !== undefined &&
+    cpPV2 >= 450;
   const isNearBestForSac = isBestMove || (deltaWP <= 1.0 && cpDrop <= 35 && !lostMate);
   if (materialSacrificed >= 2 && isNearBestForSac && wpPlayed >= 38.0) {
-    return createResult("Brilliant", deltaWP, true);
+    if (!worsenedMate && !isKingCheckEscape && !isMopUp) {
+      return createResult("Brilliant", deltaWP, true);
+    }
   }
 
   // 4. Great Move (!)
   // Criteria:
-  // - Sole winning move found in a critical position
+  // - Sole winning move found in a critical position (excluding trivial recaptures)
   // - PV1 keeps high advantage (wpBest >= 60%)
   // - PV2 drops out of comfortable winning territory (wpPV2 < 55%) with >= 15% WP gap
-  if (isBestMove && cpPV2 !== undefined) {
+  if (isBestMove && !isRecapture && cpPV2 !== undefined) {
     const wpPV2 = centipawnsToWinProbability(cpPV2, matePV2);
     if (wpBest >= 60.0 && wpPV2 < 55.0 && (wpBest - wpPV2 >= 15.0 || wpPV2 < 48.0)) {
       return createResult("Great", deltaWP, true);

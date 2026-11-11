@@ -33,6 +33,13 @@ export interface ParsedPgnGame {
   moves: ParsedMove[];
 }
 
+export interface AnalyzedPvLine {
+  multipv: number;
+  cp: number;
+  mate?: number;
+  pvSan: string[];
+}
+
 export interface AnalyzedMove extends ParsedMove {
   whiteCp: number;
   whiteMate?: number;
@@ -41,6 +48,8 @@ export interface AnalyzedMove extends ParsedMove {
   bestMoveSan: string;
   bestMovePvSan: string[];
   altPvSan: string[];
+  refutationPvSan?: string[];
+  pvLines?: AnalyzedPvLine[];
   materialSacrificed: number;
   classification: ClassificationResult;
   tacticalContext: TacticalContext;
@@ -69,6 +78,7 @@ export interface GameAnalysis {
     whiteCp: number;
     whiteMate?: number;
     evalLabel: string;
+    pvLines?: AnalyzedPvLine[];
   };
   opening: GameOpeningAnalysis;
   moves: AnalyzedMove[];
@@ -76,6 +86,12 @@ export interface GameAnalysis {
     white: PlayerSummary;
     black: PlayerSummary;
   };
+}
+
+function parseHeaderElo(raw?: string): number | undefined {
+  if (!raw) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export interface AnalyzeGameOptions {
@@ -259,6 +275,14 @@ export async function analyzeGame(
         );
 
     const materialSacrificed = isBook ? 0 : calculateMaterialSacrifice(move.fenBefore, move.san);
+    const prevMove = i > 0 ? moves[i - 1] : undefined;
+    const isRecapture =
+      Boolean(prevMove) &&
+      prevMove!.san.includes("x") &&
+      move.san.includes("x") &&
+      prevMove!.to === move.to;
+    const movedPiece = chessBefore.get(move.from);
+    const isKingCheckEscape = chessBefore.inCheck() && movedPiece?.type === "k";
 
     const classification = classifyMove({
       ply: move.ply,
@@ -274,6 +298,8 @@ export async function analyzeGame(
       prevMoveOpponentDeltaWP: prevDeltaWP,
       materialSacrificed,
       isBestMove,
+      isRecapture,
+      isKingCheckEscape,
     });
 
     const tacticalContext = extractTacticalContext(
@@ -294,11 +320,28 @@ export async function analyzeGame(
       bestMoveSan: evalBefore.bestMoveSan,
       bestMovePvSan: bestLine?.pvSan ?? [],
       altPvSan: secondLine?.pvSan ?? [],
+      refutationPvSan: evalAfter.lines[0]?.pvSan ?? [],
+      pvLines: evalBefore.lines.slice(0, 3).map((line) => ({
+        multipv: line.multipv,
+        cp: line.cp,
+        mate: line.mate,
+        pvSan: line.pvSan,
+      })),
       materialSacrificed,
       classification,
       tacticalContext,
     });
   }
+
+  const whiteHeaderElo = parseHeaderElo(headers.WhiteElo);
+  const blackHeaderElo = parseHeaderElo(headers.BlackElo);
+  const parseResultScore = (color: "w" | "b"): number | undefined => {
+    const r = headers.Result?.trim();
+    if (r === "1-0") return color === "w" ? 1 : 0;
+    if (r === "0-1") return color === "w" ? 0 : 1;
+    if (r === "1/2-1/2") return 0.5;
+    return undefined;
+  };
 
   const summarizePlayer = (color: "w" | "b"): PlayerSummary => {
     const playerMoves = analyzedMoves.filter((m) => m.color === color);
@@ -311,8 +354,12 @@ export async function analyzeGame(
     const toAccuracyItems = (subset: AnalyzedMove[]) =>
       subset.map((m) => {
         const beforeEval = evals[m.ply - 1];
+        const bestLine = beforeEval.lines[0];
         const bestActive = uciScoreToActiveCentipawns(
-          { cp: beforeEval.whiteCp, mate: beforeEval.whiteMate },
+          {
+            cp: bestLine?.cp ?? beforeEval.whiteCp,
+            mate: bestLine?.mate ?? beforeEval.whiteMate,
+          },
           color
         );
         return {
@@ -324,10 +371,17 @@ export async function analyzeGame(
       });
 
     const accuracy = calculateOverallGameAccuracy(toAccuracyItems(playerMoves));
+    const playerElo = color === "w" ? whiteHeaderElo : blackHeaderElo;
+    const opponentElo = color === "w" ? blackHeaderElo : whiteHeaderElo;
+    const ratingContext =
+      playerElo !== undefined || opponentElo !== undefined
+        ? { playerElo, opponentElo, resultScore: parseResultScore(color) }
+        : undefined;
     const estimatedElo = estimatePerformanceRating(
       accuracy,
       badgeCounts.Blunder + badgeCounts.Miss,
-      badgeCounts.Mistake
+      badgeCounts.Mistake,
+      ratingContext
     );
 
     const openingMoves = playerMoves.filter((m) => m.tacticalContext.gamePhase === "Opening");
@@ -362,6 +416,12 @@ export async function analyzeGame(
           whiteCp: evals[0].whiteCp,
           whiteMate: evals[0].whiteMate,
           evalLabel: formatEvalLabel(evals[0].whiteCp, evals[0].whiteMate, evals[0].isCheckmate),
+          pvLines: evals[0].lines.slice(0, 3).map((line) => ({
+            multipv: line.multipv,
+            cp: line.cp,
+            mate: line.mate,
+            pvSan: line.pvSan,
+          })),
         }
       : undefined,
     opening,

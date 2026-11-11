@@ -288,4 +288,58 @@ describe("move-classifier (11 official Chess.com badges)", () => {
     expect(onlyMove.deltaWP).toBe(0);
     expect(onlyMove.accuracy).toBe(100.0);
   });
+
+  it("rejects false Brilliant badges (worsened mate, king check-escape, dead-won mop-up) and trivial recaptures from Great", () => {
+    // 1) Worsening mate (M7 -> M9 while leaving rook en prise) cannot be Brilliant
+    const worsenedMate = classifyMove(
+      baseInput({
+        moveSan: "Rd5+",
+        materialSacrificed: 4,
+        isBestMove: false,
+        cpBest: 10000,
+        mateBest: 7,
+        cpPlayed: 10000,
+        matePlayed: 9,
+      })
+    );
+    expect(worsenedMate.badge).not.toBe("Brilliant");
+
+    // 2) Passive King check-escape (e.g. 11...Ke7) cannot be Brilliant
+    const kingEscape = classifyMove(
+      baseInput({
+        moveSan: "Ke7",
+        materialSacrificed: 2,
+        isBestMove: true,
+        cpBest: -20,
+        cpPlayed: -20,
+        isKingCheckEscape: true,
+      })
+    );
+    expect(kingEscape.badge).toBe("Best");
+
+    // 3) Overwhelmingly won mop-up (+700 when PV2 is also +550) cannot be Brilliant
+    const mopUp = classifyMove(
+      baseInput({
+        materialSacrificed: 3,
+        isBestMove: true,
+        cpBest: 700,
+        cpPlayed: 700,
+        cpPV2: 550,
+      })
+    );
+    expect(mopUp.badge).toBe("Best");
+
+    // 4) Trivial recapture (capturing back on opponent's last destination square) should not inflate to Great
+    const trivialRecapture = classifyMove(
+      baseInput({
+        moveSan: "Bxd8",
+        isBestMove: true,
+        cpBest: 350,
+        cpPlayed: 350,
+        cpPV2: -100,
+        isRecapture: true,
+      })
+    );
+    expect(trivialRecapture.badge).toBe("Best");
+  });
 });

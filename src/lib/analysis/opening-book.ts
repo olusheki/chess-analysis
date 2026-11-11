@@ -62,8 +62,40 @@ const STANDARD_START_FEN_KEY = normalizeFenKey(
 );
 
 /**
+ * Resolves known ECO-book FEN collisions where a different move order (e.g. 1. e4 Nf6 2. d4 -> Alekhine Defense)
+ * shares a destination FEN with a gambit from another move order (1. d4 Nf6 2. e4 -> Indian Defense: Omega Gambit).
+ */
+function resolveMoveOrderCollision(
+  fenKey: string,
+  movesSan: string[],
+  match: OpeningMatch | null
+): OpeningMatch | null {
+  if (!match) return null;
+  const boardAndTurn = fenKey.split(" ").slice(0, 3).join(" ");
+  if (movesSan[0] === "e4" && movesSan[1] === "Nf6") {
+    if (boardAndTurn === "rnbqkb1r/pppppppp/5n2/8/3PP3/8/PPP2PPP/RNBQKBNR b KQkq") {
+      return {
+        eco: "B02",
+        name: "Alekhine Defense: 2.d4",
+        moves: "1. e4 Nf6 2. d4",
+        fenKey: match.fenKey,
+      };
+    }
+    if (boardAndTurn === "rnbqkb1r/pppppppp/8/8/3Pn3/8/PPP2PPP/RNBQKBNR w KQkq") {
+      return {
+        eco: "B02",
+        name: "Alekhine Defense: 2.d4 Nxe4",
+        moves: "1. e4 Nf6 2. d4 Nxe4",
+        fenKey: match.fenKey,
+      };
+    }
+  }
+  return match;
+}
+
+/**
  * Classifies all moves of a game against the ECO opening database,
- * detecting transpositions and the exact ply where the game exits book theory.
+ * detecting transpositions (including brief detours) and the exact ply where the game exits book theory.
  */
 export function classifyGameOpenings(
   movesSan: string[],
@@ -89,6 +121,7 @@ export function classifyGameOpenings(
 
   let stillInBook = true;
   let lastMatchedOpening: OpeningMatch | null = null;
+  let lastMatchedPly = -1;
   let bookPlies = 0;
   let outOfBookPly: number | null = null;
 
@@ -109,16 +142,26 @@ export function classifyGameOpenings(
       continue;
     }
 
-    if (stillInBook && i < maxBookPly) {
-      const match = lookupOpeningByFen(chess.fen());
+    if (i < maxBookPly && (stillInBook || i <= lastMatchedPly + 4)) {
+      const fenKey = normalizeFenKey(chess.fen());
+      const rawMatch = lookupOpeningByFen(chess.fen());
+      const match = resolveMoveOrderCollision(fenKey, movesSan, rawMatch);
       if (match) {
-        plyIsBook.push(true);
-        plyOpenings.push(match);
         lastMatchedOpening = match;
-        bookPlies = i + 1;
+        lastMatchedPly = i;
+        plyOpenings.push(match);
+        if (stillInBook) {
+          plyIsBook.push(true);
+          bookPlies = i + 1;
+        } else {
+          // Recovered opening identity via transposition after an out-of-book detour
+          plyIsBook.push(false);
+        }
       } else {
-        stillInBook = false;
-        outOfBookPly = i + 1;
+        if (stillInBook) {
+          stillInBook = false;
+          outOfBookPly = i + 1;
+        }
         plyIsBook.push(false);
         plyOpenings.push(null);
       }

@@ -280,4 +280,119 @@ describe("game-analyzer (full Tier 1 + Tier 2 pipeline)", () => {
       name: "AbortError",
     });
   });
+
+  it("populates refutationPvSan from evalAfter, top-3 scored pvLines from evalBefore, suppresses recapture Great, and anchors ELO to PGN ratings", async () => {
+    const pgn = `[White "RatedLow"]
+[Black "RatedPeer"]
+[WhiteElo "800"]
+[BlackElo "400"]
+[Result "1-0"]
+
+1. e4 d5 2. exd5 Qxd5 3. Nc3 Qa5 4. a3 c5 5. d4 cxd4 6. Qxd4 Nc6 7. Bb5 Qxb5 8. Nxb5 Nxd4 1-0`;
+
+    const c = new Chess();
+    const fens: string[] = [c.fen()];
+    const sans = ["e4", "d5", "exd5", "Qxd5", "Nc3", "Qa5", "a3", "c5", "d4", "cxd4", "Qxd4", "Nc6", "Bb5", "Qxb5", "Nxb5", "Nxd4"];
+    for (const san of sans) {
+      c.move(san);
+      fens.push(c.fen());
+    }
+
+    const evalMap: Record<string, PositionEval> = {
+      // Before 4. a3 (fen index 6, out of book): White plays a3 (index 6)
+      [fens[6]]: {
+        fen: fens[6],
+        depth: 14,
+        bestMoveUci: "d2d4",
+        bestMoveSan: "d4",
+        whiteCp: 60,
+        lines: [
+          { multipv: 1, cp: 60, pvUci: ["d2d4", "g8f6"], pvSan: ["d4", "Nf6"] },
+          { multipv: 2, cp: 20, pvUci: ["g1f3", "c7c6"], pvSan: ["Nf3", "c6"] },
+          { multipv: 3, cp: 10, pvUci: ["f1c4", "g8f6"], pvSan: ["Bc4", "Nf6"] },
+        ],
+      },
+      // After 4. a3 -> before 4...c5 (fen index 7): Black should play Nf6 (-20), plays c5? (-180 from Black = +180 White)
+      [fens[7]]: {
+        fen: fens[7],
+        depth: 14,
+        bestMoveUci: "g8f6",
+        bestMoveSan: "Nf6",
+        whiteCp: 20,
+        lines: [
+          { multipv: 1, cp: 20, pvUci: ["g8f6", "d2d4"], pvSan: ["Nf6", "d4"] },
+          { multipv: 2, cp: 45, pvUci: ["c7c6", "g1f3"], pvSan: ["c6", "Nf3"] },
+        ],
+      },
+      // After 4...c5 (fen index 8): refutation is d4 / Nb5!
+      [fens[8]]: {
+        fen: fens[8],
+        depth: 14,
+        bestMoveUci: "c3b5",
+        bestMoveSan: "Nb5",
+        whiteCp: 240,
+        lines: [{ multipv: 1, cp: 240, pvUci: ["c3b5", "a5d8"], pvSan: ["Nb5", "Qd8"] }],
+      },
+      // Before 6. Qxd4 (fen index 10): out-of-book recapture on d4 where PV2 drops huge -> must NOT get Great!
+      [fens[10]]: {
+        fen: fens[10],
+        depth: 14,
+        bestMoveUci: "d1d4",
+        bestMoveSan: "Qxd4",
+        whiteCp: 220,
+        lines: [
+          { multipv: 1, cp: 220, pvUci: ["d1d4", "b8c6"], pvSan: ["Qxd4", "Nc6"] },
+          { multipv: 2, cp: -120, pvUci: ["a1b1", "b8c6"], pvSan: ["Rb1", "Nc6"] },
+        ],
+      },
+      [fens[11]]: {
+        fen: fens[11],
+        depth: 14,
+        bestMoveUci: "b8c6",
+        bestMoveSan: "Nc6",
+        whiteCp: 220,
+        lines: [{ multipv: 1, cp: 220, pvUci: ["b8c6", "f1b5"], pvSan: ["Nc6", "Bb5"] }],
+      },
+    };
+
+    const mockEngine: ChessEngine = {
+      async evaluatePosition(fen, depth) {
+        return (
+          evalMap[fen] ?? {
+            fen,
+            depth,
+            bestMoveUci: "g1f3",
+            bestMoveSan: "Nf3",
+            whiteCp: 30,
+            lines: [{ multipv: 1, cp: 30, pvUci: ["g1f3"], pvSan: ["Nf3"] }],
+          }
+        );
+      },
+      dispose() {},
+    };
+
+    const res = await analyzeGame(pgn, mockEngine, { depth: 14 });
+    // 4. a3 has top-3 scored pvLines populated
+    const moveA3 = res.moves[6];
+    expect(moveA3.san).toBe("a3");
+    expect(moveA3.pvLines).toHaveLength(3);
+    expect(moveA3.pvLines?.[0]).toMatchObject({ multipv: 1, cp: 60, pvSan: ["d4", "Nf6"] });
+
+    // 4...c5 carries evalAfter refutation line (distinct from altPvSan)
+    const moveC5 = res.moves[7];
+    expect(moveC5.san).toBe("c5");
+    expect(moveC5.altPvSan).toEqual(["c6", "Nf3"]);
+    expect(moveC5.refutationPvSan).toEqual(["Nb5", "Qd8"]);
+    expect(moveC5.classification.badge).toBe("Blunder");
+
+    // 6. Qxd4 is an out-of-book recapture after 5...cxd4 and must stay Best instead of Great
+    const moveQxd4 = res.moves[10];
+    expect(moveQxd4.san).toBe("Qxd4");
+    expect(moveQxd4.classification.badge).toBe("Best");
+
+    // PGN ratings 800 vs 400 keep estimatedElo realistic (< 1500) rather than 2850
+    expect(res.summary.white.estimatedElo).toBeGreaterThanOrEqual(400);
+    expect(res.summary.white.estimatedElo).toBeLessThan(1500);
+    expect(res.summary.black.estimatedElo).toBeLessThan(900);
+  });
 });
