@@ -74,9 +74,31 @@ export interface GameStorylineResponse {
   coachMode?: "live" | "offline";
 }
 
-function formatLineSeq(lines?: string[], maxMoves = 3): string {
+function formatLineSeq(
+  lines?: string[],
+  maxMoves = 4,
+  startMoveNumber?: number,
+  startColor?: "w" | "b"
+): string {
   if (!lines || lines.length === 0) return "";
-  return lines.slice(0, maxMoves).join(" ");
+  const slice = lines.slice(0, maxMoves);
+  if (startMoveNumber === undefined || !startColor) {
+    return slice.join(" ");
+  }
+  const tokens: string[] = [];
+  let moveNo = startMoveNumber;
+  let turn: "w" | "b" = startColor;
+  for (let i = 0; i < slice.length; i++) {
+    if (turn === "w") {
+      tokens.push(`${moveNo}. ${slice[i]}`);
+      turn = "b";
+    } else {
+      tokens.push(i === 0 ? `${moveNo}...${slice[i]}` : slice[i]);
+      moveNo += 1;
+      turn = "w";
+    }
+  }
+  return tokens.join(" ");
 }
 
 function formatPhaseMetric(acc: number, count?: number): string {
@@ -413,9 +435,23 @@ Return an encouraging, factual 2-3 sentence summary and 1 takeaway per side.
     const isPlayerMove = playedBy === perspective;
     const oppLabel = req.opponentName || "Your opponent";
     const voice = getOfflinePersonaVoice(req.personaId);
-    const tacticalDetail = this.describeTacticalFeatures(tacticalContext);
-    const refutationSeq = formatLineSeq(req.refutationPV);
-    const bestSeq = formatLineSeq(req.bestMovePV) || engineBestMove;
+    const suppressPositivePraise = badge === "Blunder" || badge === "Miss";
+    const suppressCenterTag = suppressPositivePraise || badge === "Mistake" || badge === "Inaccuracy";
+    const tacticalDetail = this.describeTacticalFeatures(
+      tacticalContext,
+      suppressPositivePraise,
+      suppressCenterTag
+    );
+    const playedTurn: "w" | "b" = playedBy === "Black" ? "b" : "w";
+    const replyTurn: "w" | "b" = playedTurn === "w" ? "b" : "w";
+    const replyMoveNumber =
+      req.moveNumber !== undefined
+        ? playedTurn === "b"
+          ? req.moveNumber + 1
+          : req.moveNumber
+        : undefined;
+    const refutationSeq = formatLineSeq(req.refutationPV, 4, replyMoveNumber, replyTurn);
+    const bestSeq = formatLineSeq(req.bestMovePV, 4, req.moveNumber, playedTurn) || engineBestMove;
 
     if (!isPlayerMove) {
       return this.buildOpponentMoveOfflineExplanation(
@@ -650,7 +686,14 @@ Return an encouraging, factual 2-3 sentence summary and 1 takeaway per side.
     };
   }
 
-  private describeTacticalFeatures(ctx: TacticalContext): string {
+  private describeTacticalFeatures(
+    ctx: TacticalContext,
+    suppressOffensivePraise = false,
+    suppressCenterPraise = false
+  ): string {
+    if (suppressOffensivePraise) {
+      return "";
+    }
     const parts: string[] = [];
 
     if (ctx.tags.includes("TACTICAL_FORK") && ctx.forkTargets && ctx.forkTargets.length >= 2) {
@@ -679,7 +722,7 @@ Return an encouraging, factual 2-3 sentence summary and 1 takeaway per side.
     if (ctx.tags.includes("CHECKMATE_THREAT")) {
       parts.push("It creates an immediate checkmate threat that must be answered.");
     }
-    if (ctx.tags.includes("CENTER_CONTROL") && parts.length === 0) {
+    if (!suppressCenterPraise && ctx.tags.includes("CENTER_CONTROL") && parts.length === 0) {
       parts.push("It contests key central squares.");
     }
     return parts.join(" ");

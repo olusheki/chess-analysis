@@ -102,21 +102,23 @@ export function calculateOverallGameAccuracy(
 
   let totalWeightedAccuracy = 0;
   let totalWeight = 0;
-  let invSum = 0;
+  let weightedInvSum = 0;
 
   for (const move of nonTrivialMoves) {
+    // Dynamic leverage weighting applies symmetrically to BOTH arithmetic and harmonic means
     const competitiveness = 1.0 - Math.abs((move.wpBest - 50) / 50);
-    const leverageWeight = 0.25 + 1.5 * Math.pow(Math.max(0, competitiveness), 1.5);
+    const leverageWeight = 0.25 + 1.5 * Math.pow(Math.max(0, competitiveness), 0.6);
     const moveAccuracy = calculateMoveAccuracy(move.deltaWP);
 
     totalWeightedAccuracy += moveAccuracy * leverageWeight;
     totalWeight += leverageWeight;
-    invSum += 1 / Math.max(2.0, moveAccuracy);
+    // Calibrated harmonic floor (8.0) prevents 1 blunder out of 16 moves from collapsing accuracy
+    weightedInvSum += leverageWeight / Math.max(8.0, moveAccuracy);
   }
 
   const weightedCompMean = totalWeightedAccuracy / totalWeight;
-  const harmonicMean = nonTrivialMoves.length / invSum;
-  const blended = (weightedCompMean + harmonicMean) / 2;
+  const weightedHarmonicMean = totalWeight / weightedInvSum;
+  const blended = 0.4 * weightedCompMean + 0.6 * weightedHarmonicMean;
 
   return parseFloat(Math.min(100, Math.max(0, blended)).toFixed(1));
 }
@@ -143,16 +145,24 @@ export function estimatePerformanceRating(
     context?.opponentElo && context.opponentElo > 0 ? context.opponentElo : undefined;
 
   if (playerElo !== undefined || opponentElo !== undefined) {
-    const anchor =
-      playerElo !== undefined && opponentElo !== undefined
-        ? (playerElo + opponentElo) / 2
-        : (opponentElo ?? playerElo)!;
-    const expectedAcc = Math.min(92, Math.max(38, 36 + anchor / 38));
+    const score = context?.resultScore ?? 0.5;
+    let anchor: number;
+    if (playerElo !== undefined && opponentElo !== undefined) {
+      // Bound upward pull from huge rating mismatches unless the underdog scored >= 0.5
+      const maxUpwardGap = score >= 0.5 ? 600 : 350;
+      const boundedOpp = playerElo + Math.max(-400, Math.min(maxUpwardGap, opponentElo - playerElo));
+      anchor = 0.75 * playerElo + 0.25 * boundedOpp;
+    } else {
+      anchor = (opponentElo ?? playerElo)!;
+    }
+
+    const expectedAcc = Math.min(90, Math.max(32, 30 + anchor / 40));
     const resultAdjustment =
-      context?.resultScore !== undefined ? (context.resultScore - 0.5) * 100 : 0;
+      context?.resultScore !== undefined ? (context.resultScore - 0.5) * 90 : 0;
+    // Accuracy already penalizes blunders/mistakes; keep blunder term as a mild tiebreaker
     const rawDelta =
-      (accuracy - expectedAcc) * 12 - blunders * 40 - mistakes * 16 + resultAdjustment;
-    const clampedDelta = Math.max(-450, Math.min(650, rawDelta));
+      (accuracy - expectedAcc) * 9 - blunders * 6 - mistakes * 3 + resultAdjustment;
+    const clampedDelta = Math.max(-220, Math.min(350, rawDelta));
     return Math.max(100, Math.min(3200, Math.round(anchor + clampedDelta)));
   }
 

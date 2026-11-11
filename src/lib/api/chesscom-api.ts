@@ -21,6 +21,10 @@ export interface ChessComGameItem {
   rated: boolean;
   time_class: "bullet" | "blitz" | "rapid" | "daily";
   rules: string;
+  accuracies?: {
+    white?: number;
+    black?: number;
+  };
   white: {
     username: string;
     rating: number;
@@ -45,6 +49,22 @@ export interface FormattedGameListItem {
   timeClass: string;
   date: string;
   pgn: string;
+  openingName?: string;
+  hasChessComAccuracy?: boolean;
+}
+
+function parseOpeningNameFromPgn(pgn: string): string | undefined {
+  const urlMatch = pgn.match(/\[ECOUrl\s+"https?:\/\/www\.chess\.com\/openings\/([^"]+)"\]/i);
+  if (urlMatch?.[1]) {
+    const cleanSlug = urlMatch[1]
+      .replace(/-\d+\.\.\..*$/, "")
+      .replace(/-\d+\..*$/, "")
+      .replace(/-/g, " ")
+      .trim();
+    if (cleanSlug) return cleanSlug;
+  }
+  const ecoMatch = pgn.match(/\[ECO\s+"([^"]+)"\]/i);
+  return ecoMatch?.[1] ? `ECO ${ecoMatch[1]}` : undefined;
 }
 
 export class ChessComApiError extends Error {
@@ -193,6 +213,10 @@ export class ChessComApiService {
         timeClass: g.time_class,
         date: formattedDate,
         pgn: g.pgn,
+        openingName: parseOpeningNameFromPgn(g.pgn),
+        hasChessComAccuracy: Boolean(
+          g.accuracies && (g.accuracies.white !== undefined || g.accuracies.black !== undefined)
+        ),
       };
     });
   }

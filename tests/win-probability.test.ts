@@ -136,6 +136,33 @@ describe("win-probability engine math", () => {
       expect(withOneBlunder).toBeGreaterThan(20);
     });
 
+    it("prevents a single blunder among solid moves from collapsing to ~50% via unweighted 2.0 floor and downweights garbage-time moves symmetrically", () => {
+      // Game 9 shape: 1 blunder in 16 moves (~68% Chess.com) should stay above 55%, not ~23% harmonic collapse
+      const oneBlunderSixteenMoves = calculateOverallGameAccuracy([
+        { deltaWP: 0, wpBest: 55 },
+        { deltaWP: 0, wpBest: 54 },
+        { deltaWP: 7.7, wpBest: 68.8 },
+        { deltaWP: 21.5, wpBest: 85.7 },
+        { deltaWP: 8.1, wpBest: 72.5 },
+        { deltaWP: 13.2, wpBest: 75.0 },
+        { deltaWP: 8.8, wpBest: 81.8 },
+        { deltaWP: 1.5, wpBest: 85.0 },
+        { deltaWP: 73.7, wpBest: 83.9 }, // single ~1% accuracy blunder
+        ...Array.from({ length: 7 }, () => ({ deltaWP: 0, wpBest: 99.8 })),
+      ]);
+      expect(oneBlunderSixteenMoves).toBeGreaterThan(54);
+
+      // Game 2 Black shape: early mistake+blunder in balanced positions followed by 20 dead-lost garbage-time moves
+      const deadLostGarbage = calculateOverallGameAccuracy([
+        { deltaWP: 2.1, wpBest: 49.1 },
+        { deltaWP: 17.6, wpBest: 48.4 },
+        { deltaWP: 0, wpBest: 29.4 },
+        { deltaWP: 35.5, wpBest: 35.9 },
+        ...Array.from({ length: 20 }, () => ({ deltaWP: 0.1, wpBest: 0.1 })),
+      ]);
+      expect(deadLostGarbage).toBeLessThan(76);
+    });
+
     it("penalizes delaying immediate forced mate (e.g. missing M1 and settling for M8)", () => {
       const m1ToM8 = calculateWinProbabilityDelta(10000, 10000, 1, 8);
       expect(m1ToM8.deltaWP).toBeGreaterThanOrEqual(7.0);
@@ -173,6 +200,23 @@ describe("win-probability engine math", () => {
       });
       expect(weakGame).toBeLessThan(400);
       expect(weakGame).toBeGreaterThanOrEqual(100);
+
+      // Losing to a massive rating outlier (390 vs 1504 at 70% accuracy) should not inflate above 760
+      const massiveMismatchLoss = estimatePerformanceRating(70.1, 1, 1, {
+        playerElo: 390,
+        opponentElo: 1504,
+        resultScore: 0,
+      });
+      expect(massiveMismatchLoss).toBeLessThan(760);
+      expect(massiveMismatchLoss).toBeGreaterThan(450);
+
+      // 272-rated player scoring ~58% accuracy in a competitive loss must not collapse to the 100 floor
+      const solidBeginnerLoss = estimatePerformanceRating(58.3, 4, 1, {
+        playerElo: 272,
+        opponentElo: 322,
+        resultScore: 0,
+      });
+      expect(solidBeginnerLoss).toBeGreaterThan(200);
     });
 
     it("handles mate === 0 fallback, very deep mates (-M25 / +M25), and boundary move accuracy", () => {

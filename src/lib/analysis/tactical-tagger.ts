@@ -330,8 +330,13 @@ export function extractTacticalContext(
         }
       }
 
-      if (forkTargets.length >= 2) {
+      if (
+        forkTargets.length >= 2 &&
+        staticExchangeOnSquare(chessAfter, movedObj.to, opponentColor) <= 0
+      ) {
         addTag("TACTICAL_FORK");
+      } else {
+        forkTargets.length = 0;
       }
 
       // 5. Tempo Gain: minor piece or pawn attacks enemy Queen or Rook

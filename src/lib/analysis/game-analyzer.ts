@@ -12,7 +12,7 @@ import {
   MoveBadge,
 } from "./move-classifier";
 import { classifyGameOpenings, GameOpeningAnalysis } from "./opening-book";
-import { calculateMaterialSacrifice } from "./sacrifice-detector";
+import { calculateMaterialSacrifice, PIECE_VALUES, staticExchangeOnSquare } from "./sacrifice-detector";
 import { extractTacticalContext, TacticalContext } from "./tactical-tagger";
 
 export interface ParsedMove {
@@ -25,6 +25,7 @@ export interface ParsedMove {
   to: Square;
   fenBefore: string;
   fenAfter: string;
+  clock?: string;
 }
 
 export interface ParsedPgnGame {
@@ -123,6 +124,19 @@ function emptyBadgeCounts(): Record<MoveBadge, number> {
   }, {} as Record<MoveBadge, number>);
 }
 
+function formatPgnClock(comment?: string): string | undefined {
+  if (!comment) return undefined;
+  const match = comment.match(/\[%clk\s+([0-9:.]+)\]/);
+  if (!match) return undefined;
+  const raw = match[1];
+  const parts = raw.split(":");
+  if (parts.length === 3 && parts[0] === "0") {
+    const mins = String(Number.parseInt(parts[1], 10));
+    return `${mins}:${parts[2]}`;
+  }
+  return raw;
+}
+
 /**
  * Parses a PGN string into headers, starting FEN, and move-by-move FEN/UCI metadata.
  */
@@ -132,6 +146,7 @@ export function parsePgnGame(pgn: string): ParsedPgnGame {
 
   const headers = chess.getHeaders();
   const verboseHistory = chess.history({ verbose: true });
+  const commentMap = new Map(chess.getComments().map((entry) => [entry.fen, entry.comment]));
 
   const startFen = headers.FEN
     ? headers.FEN
@@ -166,6 +181,7 @@ export function parsePgnGame(pgn: string): ParsedPgnGame {
       to: played.to,
       fenBefore,
       fenAfter,
+      clock: formatPgnClock(commentMap.get(fenAfter)),
     });
   }
 
@@ -282,6 +298,20 @@ export async function analyzeGame(
       move.san.includes("x") &&
       prevMove!.to === move.to;
     const movedPiece = chessBefore.get(move.from);
+    const capturedPiece = chessBefore.get(move.to);
+    const capturedVal = capturedPiece ? PIECE_VALUES[capturedPiece.type] : 0;
+    const replyGainOnDest =
+      capturedVal >= 3
+        ? staticExchangeOnSquare(
+            new Chess(move.fenAfter),
+            move.to,
+            move.color === "w" ? "b" : "w"
+          )
+        : 0;
+    const isObviousFreeCapture =
+      capturedVal >= 5
+        ? capturedVal - replyGainOnDest >= 4
+        : capturedVal >= 3 && replyGainOnDest === 0 && (prevDeltaWP ?? 0) >= 12.0;
     const isKingCheckEscape = chessBefore.inCheck() && movedPiece?.type === "k";
 
     const classification = classifyMove({
@@ -299,6 +329,7 @@ export async function analyzeGame(
       materialSacrificed,
       isBestMove,
       isRecapture,
+      isObviousFreeCapture,
       isKingCheckEscape,
     });
 

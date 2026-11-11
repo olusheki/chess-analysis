@@ -395,4 +395,83 @@ describe("game-analyzer (full Tier 1 + Tier 2 pipeline)", () => {
     expect(res.summary.white.estimatedElo).toBeLessThan(1500);
     expect(res.summary.black.estimatedElo).toBeLessThan(900);
   });
+
+  it("downgrades obvious free-Queen grabs after opponent blunders from Great to Best", async () => {
+    const pgn = `[White "Finder"]
+[Black "HungQueen"]
+[Result "1-0"]
+
+1. d4 Nf6 2. Bg5 d5 3. Nc3 e6 4. e4 Nxe4 5. Bxd8 1-0`;
+
+    const c = new Chess();
+    const fens: string[] = [c.fen()];
+    const sans = ["d4", "Nf6", "Bg5", "d5", "Nc3", "e6", "e4", "Nxe4", "Bxd8"];
+    for (const san of sans) {
+      c.move(san);
+      fens.push(c.fen());
+    }
+
+    const mockEngine: ChessEngine = {
+      async evaluatePosition(fen, depth) {
+        if (fen === fens[7]) {
+          // Before 4...Nxe4?? (index 7): Black had -10
+          return {
+            fen,
+            depth,
+            bestMoveUci: "f8e7",
+            bestMoveSan: "Be7",
+            whiteCp: -10,
+            lines: [{ multipv: 1, cp: -10, pvUci: ["f8e7"], pvSan: ["Be7"] }],
+          };
+        }
+        if (fen === fens[8]) {
+          // Before 5. Bxd8 (index 8): taking free Queen is +950, PV2 (5. Nxe4) is -20 (wpPV2 < 55%)
+          return {
+            fen,
+            depth,
+            bestMoveUci: "g5d8",
+            bestMoveSan: "Bxd8",
+            whiteCp: 950,
+            lines: [
+              { multipv: 1, cp: 950, pvUci: ["g5d8", "f8b4"], pvSan: ["Bxd8", "Bb4"] },
+              { multipv: 2, cp: -20, pvUci: ["c3e4", "d5e4"], pvSan: ["Nxe4", "dxe4"] },
+            ],
+          };
+        }
+        if (fen === fens[9]) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "f8b4",
+            bestMoveSan: "Bb4",
+            whiteCp: 950,
+            lines: [{ multipv: 1, cp: 950, pvUci: ["f8b4"], pvSan: ["Bb4"] }],
+          };
+        }
+        return {
+          fen,
+          depth,
+          bestMoveUci: "e2e4",
+          bestMoveSan: "e4",
+          whiteCp: 20,
+          lines: [{ multipv: 1, cp: 20, pvUci: ["e2e4"], pvSan: ["e4"] }],
+        };
+      },
+      dispose() {},
+    };
+
+    const res = await analyzeGame(pgn, mockEngine, { depth: 14 });
+    const moveBxd8 = res.moves[8];
+    expect(moveBxd8.san).toBe("Bxd8");
+    expect(moveBxd8.classification.badge).toBe("Best");
+  });
+
+  it("extracts [%clk ...] timestamps from PGN comments cleanly on parsed moves", () => {
+    const timedPgn = `[Event "Live Chess"]
+[TimeControl "600"]
+
+1. e4 {[%clk 0:09:58.7]} 1... e5 {[%clk 0:10:00]} 2. Nf3 {[%clk 0:09:55.1]} 2... Nf6 {[%clk 0:00:12.4]} 1-0`;
+    const parsed = parsePgnGame(timedPgn);
+    expect(parsed.moves.map((m) => m.clock)).toEqual(["9:58.7", "10:00", "9:55.1", "0:12.4"]);
+  });
 });

@@ -1,6 +1,6 @@
 import { Chess, PieceSymbol, Square } from "chess.js";
 
-const PIECE_VALUES: Record<PieceSymbol, number> = {
+export const PIECE_VALUES: Record<PieceSymbol, number> = {
   p: 1,
   n: 3,
   b: 3,
@@ -20,6 +20,7 @@ export function staticExchangeOnSquare(
 ): number {
   const targetPiece = chess.get(targetSquare);
   if (!targetPiece || targetPiece.color === sideToCapture) return 0;
+  if (!chess.isAttacked(targetSquare, sideToCapture)) return 0;
 
   // Find lowest-value legal capture onto targetSquare (ranking highest promotion first on ties)
   const legalMoves = chess.moves({ verbose: true }).filter((m) => m.to === targetSquare);

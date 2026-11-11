@@ -341,5 +341,19 @@ describe("move-classifier (11 official Chess.com badges)", () => {
       })
     );
     expect(trivialRecapture.badge).toBe("Best");
+
+    // 5) Capturing an obvious free Queen/piece left en prise elsewhere after opponent blunder (12. Bxd8) stays Best
+    const freeQueenCapture = classifyMove(
+      baseInput({
+        moveSan: "Bxd8",
+        isBestMove: true,
+        cpBest: 950,
+        cpPlayed: 950,
+        cpPV2: -20, // wpPV2 ~45.4% (< 55%) if Queen wasn't captured!
+        prevMoveOpponentDeltaWP: 45.0,
+        isObviousFreeCapture: true,
+      })
+    );
+    expect(freeQueenCapture.badge).toBe("Best");
   });
 });

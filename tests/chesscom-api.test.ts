@@ -220,4 +220,40 @@ describe("ChessComApiService (module 0 username importer)", () => {
     const filtered = await ChessComApiService.getRecentGames("u", 10);
     expect(filtered).toEqual([]);
   });
+
+  it("extracts ECOUrl openingName and Chess.com reviewed indicator from game items", async () => {
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith("/games/archives")) {
+        return {
+          ok: true,
+          json: async () => ({ archives: ["https://api.chess.com/pub/player/u/games/2026/11"] }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          games: [
+            {
+              url: "https://chess.com/game/10",
+              pgn: `[Event "Live Chess"]\n[ECO "B20"]\n[ECOUrl "https://www.chess.com/openings/Sicilian-Defense-Open"]\n\n1. e4 c5 1-0`,
+              time_control: "600",
+              end_time: 1700000900,
+              rated: true,
+              time_class: "rapid",
+              rules: "chess",
+              accuracies: { white: 82.4, black: 71.1 },
+              white: { username: "u", rating: 800, result: "win" },
+              black: { username: "opp", rating: 780, result: "resigned" },
+            },
+          ],
+        }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const games = await ChessComApiService.getRecentGames("u", 5);
+    expect(games).toHaveLength(1);
+    expect(games[0].openingName).toBe("Sicilian Defense Open");
+    expect(games[0].hasChessComAccuracy).toBe(true);
+  });
 });

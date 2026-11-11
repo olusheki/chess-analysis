@@ -35,11 +35,11 @@ describe("tactical-tagger (deterministic board feature detector)", () => {
     expect(ctx1.tags).toContain("TACTICAL_FORK");
     expect(ctx1.forkTargets?.map((t) => t.square)).toEqual(expect.arrayContaining(["c7", "e7"]));
 
-    // Pawn promotion to Queen forking King on h8 and Rook on a8: e8=Q+
-    const promoFen = "r6k/4P3/8/8/8/8/8/4K3 w - - 0 40";
+    // Pawn promotion to Queen forking King on h8 and Rook on a4: e8=Q+
+    const promoFen = "7k/4P3/8/8/r7/8/8/4K3 w - - 0 40";
     const ctx2 = playAndExtract(promoFen, "e8=Q+", 40);
     expect(ctx2.tags).toContain("TACTICAL_FORK");
-    expect(ctx2.forkTargets?.map((t) => t.square)).toEqual(expect.arrayContaining(["a8", "h8"]));
+    expect(ctx2.forkTargets?.map((t) => t.square)).toEqual(expect.arrayContaining(["a4", "h8"]));
   });
 
   it("prioritizes the highest-value hanging piece rather than stopping at a hanging pawn", () => {
@@ -189,5 +189,10 @@ describe("tactical-tagger (deterministic board feature detector)", () => {
 
     const breakCtx = playAndExtract("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2", "d4", 2);
     expect(breakCtx.tags).toContain("PAWN_BREAK");
+
+    // Hanging pseudo-fork (Nf2 attacking Qd1 and Rh1 directly into Bxf2) must NOT celebrate TACTICAL_FORK
+    const pseudoForkFen = "4k3/8/8/8/4n3/4B3/8/3Q2KR b - - 0 20";
+    const pseudoForkCtx = playAndExtract(pseudoForkFen, "Nf2", 20);
+    expect(pseudoForkCtx.tags).not.toContain("TACTICAL_FORK");
   });
 });

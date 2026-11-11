@@ -306,6 +306,31 @@ describe("gemini-coach & explainability grounding", () => {
     expect(tacticalTagsRes.detailedExplanation).toContain("discovered attack on the Queen on h7");
     expect(tacticalTagsRes.detailedExplanation).toContain("checkmate threat");
 
+    // Suppress positive CENTER_CONTROL / TACTICAL_FORK praise on Blunder & Miss, and add move numbers to PV sequences
+    const blunderNoPraise = await coach.explainMove({
+      moveSan: "Ne5",
+      playedBy: "White",
+      moveNumber: 6,
+      badge: "Blunder",
+      evalBefore: "+0.2",
+      evalAfter: "-2.8",
+      deltaWP: 42,
+      engineBestMove: "O-O",
+      bestMovePV: ["O-O", "O-O", "Bg5"],
+      refutationPV: ["dxe5", "Bb5", "Nd7"],
+      tacticalContext: makeContext({
+        tags: ["CENTER_CONTROL", "TACTICAL_FORK"],
+        forkTargets: [
+          { square: "c6", piece: "Knight" },
+          { square: "f7", piece: "Bishop" },
+        ],
+      }),
+    });
+    expect(blunderNoPraise.detailedExplanation).not.toContain("contests key central squares");
+    expect(blunderNoPraise.detailedExplanation).not.toContain("creates a fork");
+    expect(blunderNoPraise.detailedExplanation).toContain("6...dxe5 7. Bb5");
+    expect(blunderNoPraise.bestMoveReasoning).toContain("6. O-O O-O 7. Bg5");
+
     for (const badge of [
       "Book",
       "Great",
@@ -334,7 +359,6 @@ describe("gemini-coach & explainability grounding", () => {
       expect(res.shortComment.length).toBeGreaterThan(5);
     }
 
-    // Castle & Development paths
     const castle = await coach.explainMove({
       moveSan: "O-O",
       playedBy: "White",

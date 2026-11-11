@@ -33,6 +33,7 @@ export interface MoveClassificationInput {
   materialSacrificed: number;      // Net points of material sacrificed (e.g. piece given up without immediate recapture)
   isBestMove: boolean;             // Whether move matches PV1
   isRecapture?: boolean;           // Capturing back on the square opponent just captured on
+  isObviousFreeCapture?: boolean;  // Capturing an undefended Queen/Rook or free piece left en prise
   isKingCheckEscape?: boolean;     // King moving to escape check (not a creative sacrifice)
 }
 
@@ -123,10 +124,10 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
 
   // 4. Great Move (!)
   // Criteria:
-  // - Sole winning move found in a critical position (excluding trivial recaptures)
+  // - Sole winning move found in a critical position (excluding trivial recaptures and obvious free-piece grabs)
   // - PV1 keeps high advantage (wpBest >= 60%)
   // - PV2 drops out of comfortable winning territory (wpPV2 < 55%) with >= 15% WP gap
-  if (isBestMove && !isRecapture && cpPV2 !== undefined) {
+  if (isBestMove && !isRecapture && !input.isObviousFreeCapture && cpPV2 !== undefined) {
     const wpPV2 = centipawnsToWinProbability(cpPV2, matePV2);
     if (wpBest >= 60.0 && wpPV2 < 55.0 && (wpBest - wpPV2 >= 15.0 || wpPV2 < 48.0)) {
       return createResult("Great", deltaWP, true);
