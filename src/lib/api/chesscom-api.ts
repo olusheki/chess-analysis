@@ -78,20 +78,30 @@ export class ChessComApiError extends Error {
 
 export class ChessComApiService {
   private static readonly BASE_URL = "https://api.chess.com/pub";
-  private static readonly HEADERS = {
-    "User-Agent": "ChessGameReviewApp/1.0 (contact: support@chessanalysis.app)",
-    Accept: "application/json",
-  };
+
+  private static getRequestHeaders(): Record<string, string> {
+    if (typeof window !== "undefined") {
+      return { Accept: "application/json" };
+    }
+    return {
+      "User-Agent": "ChessGameReviewApp/1.0 (contact: support@chessanalysis.app)",
+      Accept: "application/json",
+    };
+  }
 
   /**
    * Fetches player profile information (avatar, status, title)
    */
-  static async getPlayerProfile(username: string): Promise<ChessComPlayerProfile | null> {
+  static async getPlayerProfile(
+    username: string,
+    signal?: AbortSignal
+  ): Promise<ChessComPlayerProfile | null> {
     const normalized = username.trim().toLowerCase();
     if (!normalized) return null;
     const sanitized = encodeURIComponent(normalized);
     const res = await fetch(`${this.BASE_URL}/player/${sanitized}`, {
-      headers: this.HEADERS,
+      headers: this.getRequestHeaders(),
+      signal,
     });
 
     if (res.status === 404) return null;
@@ -109,7 +119,11 @@ export class ChessComApiService {
    * Fetches recent completed standard chess games for a user
    * (queries latest monthly archives until `limit` games are collected)
    */
-  static async getRecentGames(username: string, limit: number = 15): Promise<FormattedGameListItem[]> {
+  static async getRecentGames(
+    username: string,
+    limit: number = 15,
+    signal?: AbortSignal
+  ): Promise<FormattedGameListItem[]> {
     const rawUser = username.trim().toLowerCase();
     if (!rawUser) {
       throw new ChessComApiError("Username is required", 400);
@@ -117,7 +131,8 @@ export class ChessComApiService {
     const sanitized = encodeURIComponent(rawUser);
 
     const archivesRes = await fetch(`${this.BASE_URL}/player/${sanitized}/games/archives`, {
-      headers: this.HEADERS,
+      headers: this.getRequestHeaders(),
+      signal,
     });
 
     if (archivesRes.status === 404) {
@@ -139,7 +154,10 @@ export class ChessComApiService {
     // Walk backwards through monthly archives (max 3 months) until limit standard games are gathered
     for (let i = archives.length - 1; i >= Math.max(0, archives.length - 3); i--) {
       const archiveUrl = archives[i];
-      const gamesRes = await fetch(archiveUrl, { headers: this.HEADERS });
+      const gamesRes = await fetch(archiveUrl, {
+        headers: this.getRequestHeaders(),
+        signal,
+      });
       if (!gamesRes.ok) {
         if (i === archives.length - 1 && collectedGames.length === 0) {
           throw new Error(`Failed to fetch games from archive ${archiveUrl}`);
@@ -220,4 +238,31 @@ export class ChessComApiService {
       };
     });
   }
+}
+
+/**
+ * Fetches a Chess.com player profile and recent games directly from Chess.com PubAPI.
+ * Shared by both the server route handler and client-side static exports (GitHub Pages).
+ */
+export async function fetchChessComPlayerAndGames(
+  username: string,
+  limit: number = 15,
+  signal?: AbortSignal
+): Promise<{ profile: ChessComPlayerProfile | null; games: FormattedGameListItem[] }> {
+  const cleaned = username.trim();
+  if (!cleaned || !/^[a-zA-Z0-9_-]{1,50}$/.test(cleaned)) {
+    throw new ChessComApiError("Provide a valid Chess.com username.", 400);
+  }
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(30, limit)) : 15;
+
+  const [profile, games] = await Promise.all([
+    ChessComApiService.getPlayerProfile(cleaned, signal),
+    ChessComApiService.getRecentGames(cleaned, safeLimit, signal),
+  ]);
+
+  if (!profile && games.length === 0) {
+    throw new ChessComApiError(`Player "${cleaned}" was not found on Chess.com.`, 404);
+  }
+
+  return { profile, games };
 }

@@ -2,14 +2,22 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { Search, User, Loader2 } from "lucide-react";
-import type { ChessComPlayerProfile, FormattedGameListItem } from "@/lib/api/chesscom-api";
+import {
+  fetchChessComPlayerAndGames,
+  type ChessComPlayerProfile,
+  type FormattedGameListItem,
+} from "@/lib/api/chesscom-api";
 import { GameSelectionList } from "./GameSelectionList";
 
 interface UsernameImporterProps {
   onSelectGame: (pgn: string, meta?: { userColor?: "white" | "black" }) => void;
+  staticExport?: boolean;
 }
 
-export function UsernameImporter({ onSelectGame }: UsernameImporterProps) {
+export function UsernameImporter({
+  onSelectGame,
+  staticExport = process.env.NEXT_PUBLIC_STATIC_EXPORT === "true",
+}: UsernameImporterProps) {
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,22 +43,35 @@ export function UsernameImporter({ onSelectGame }: UsernameImporterProps) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/chesscom?username=${encodeURIComponent(cleaned)}&limit=15`,
-        { signal: controller.signal }
-      );
-      if (controller.signal.aborted) return;
-      const data = await res.json();
-      if (controller.signal.aborted) return;
-      if (!res.ok) {
-        setError(data.error || "Could not load games for that player.");
-        setProfile(null);
-        setGames([]);
-        return;
+      let loadedProfile: ChessComPlayerProfile | null = null;
+      let loadedGames: FormattedGameListItem[] = [];
+
+      if (staticExport) {
+        const direct = await fetchChessComPlayerAndGames(cleaned, 15, controller.signal);
+        if (controller.signal.aborted) return;
+        loadedProfile = direct.profile;
+        loadedGames = direct.games;
+      } else {
+        const res = await fetch(
+          `/api/chesscom?username=${encodeURIComponent(cleaned)}&limit=15`,
+          { signal: controller.signal }
+        );
+        if (controller.signal.aborted) return;
+        const data = await res.json();
+        if (controller.signal.aborted) return;
+        if (!res.ok) {
+          setError(data.error || "Could not load games for that player.");
+          setProfile(null);
+          setGames([]);
+          return;
+        }
+        loadedProfile = data.profile ?? null;
+        loadedGames = data.games ?? [];
       }
-      setProfile(data.profile ?? null);
-      setGames(data.games ?? []);
-      if ((data.games ?? []).length === 0) {
+
+      setProfile(loadedProfile);
+      setGames(loadedGames);
+      if (loadedGames.length === 0) {
         setError(`No recent standard chess games found for "${cleaned}".`);
       }
     } catch (err) {
@@ -60,7 +81,15 @@ export function UsernameImporter({ onSelectGame }: UsernameImporterProps) {
       ) {
         return;
       }
-      setError("Network error while connecting to Chess.com API.");
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Network error while connecting to Chess.com API."
+      );
+      if (staticExport) {
+        setProfile(null);
+        setGames([]);
+      }
     } finally {
       if (abortRef.current === controller) {
         setLoading(false);

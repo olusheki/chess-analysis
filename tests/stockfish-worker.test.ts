@@ -156,4 +156,31 @@ describe("stockfish-worker (browser Web Worker lifecycle & cancellation)", () =>
     expect(res.bestMoveUci).toBe("d2d4");
     engine.dispose();
   });
+
+  it("prefixes worker script URL with NEXT_PUBLIC_BASE_PATH for subpath deployments like GitHub Pages", async () => {
+    vi.stubEnv("NEXT_PUBLIC_BASE_PATH", "/chess-analysis/");
+    (globalThis as unknown as { window: { crossOriginIsolated: boolean } }).window = {
+      crossOriginIsolated: false,
+    };
+
+    const engine = createBrowserStockfishEngine();
+    const p = engine.evaluatePosition(
+      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      8,
+      1
+    );
+    await Promise.resolve();
+    const w = MockWorker.instances[0];
+    expect(w.url).toBe("/chess-analysis/stockfish/stockfish-17.1-lite-single-03e3232.js");
+    w.emit("uciok");
+    await Promise.resolve();
+    await Promise.resolve();
+    w.emit("readyok");
+    await Promise.resolve();
+    await Promise.resolve();
+    w.emit("info depth 8 multipv 1 score cp 12 pv e2e4\nbestmove e2e4");
+    await p;
+    engine.dispose();
+    vi.unstubAllEnvs();
+  });
 });

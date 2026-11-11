@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ChessComApiService } from "@/lib/api/chesscom-api";
+import { ChessComApiService, fetchChessComPlayerAndGames } from "@/lib/api/chesscom-api";
 
 describe("ChessComApiService (module 0 username importer)", () => {
   const originalFetch = globalThis.fetch;
@@ -255,5 +255,46 @@ describe("ChessComApiService (module 0 username importer)", () => {
     expect(games).toHaveLength(1);
     expect(games[0].openingName).toBe("Sicilian Defense Open");
     expect(games[0].hasChessComAccuracy).toBe(true);
+  });
+
+  it("fetchChessComPlayerAndGames omits User-Agent in browser environments, validates username, and forwards AbortSignal", async () => {
+    const seenHeaders: Record<string, string>[] = [];
+    const seenSignals: (AbortSignal | undefined)[] = [];
+    const origWindow = globalThis.window;
+    vi.stubGlobal("window", {});
+
+    try {
+      globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        seenHeaders.push((init?.headers as Record<string, string>) ?? {});
+        seenSignals.push(init?.signal ?? undefined);
+        const u = String(url);
+        if (u.endsWith("/player/olusheki")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ username: "olusheki", status: "basic", followers: 1 }),
+          } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ archives: [] }),
+        } as Response;
+      }) as unknown as typeof fetch;
+
+      const controller = new AbortController();
+      const result = await fetchChessComPlayerAndGames("olusheki", 15, controller.signal);
+      expect(result.profile?.username).toBe("olusheki");
+      expect(result.games).toEqual([]);
+      expect(seenHeaders[0]["User-Agent"]).toBeUndefined();
+      expect(seenSignals[0]).toBe(controller.signal);
+
+      await expect(fetchChessComPlayerAndGames("bad user!")).rejects.toMatchObject({
+        status: 400,
+      });
+    } finally {
+      (globalThis as unknown as { window: unknown }).window = origWindow;
+      vi.unstubAllGlobals();
+    }
   });
 });

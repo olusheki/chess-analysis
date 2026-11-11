@@ -26,6 +26,12 @@ import type { ChessEngine } from "@/lib/engine/engine-evaluator";
 import { formatEvalLabel } from "@/lib/engine/uci-parser";
 import { computeCapturedMaterial } from "@/lib/chess/material";
 import { COACH_PERSONAS, CoachPersonaId } from "@/lib/ai/coach-personas";
+import {
+  buildOfflineGameStoryline,
+  buildOfflineMoveExplanation,
+  type CoachExplanationRequest,
+  type GameStorylineRequest,
+} from "@/lib/ai/offline-coach";
 import { SAMPLE_GAMES } from "@/lib/sample-games";
 import { getActiveMove, useReviewStore } from "@/lib/store/useReviewStore";
 import { Chessboard, BoardThemeId } from "@/components/chess/Chessboard";
@@ -194,60 +200,65 @@ export default function GameReviewPage() {
 
     const controller = new AbortController();
     const turningMove = analysis.moves.find((m) => m.classification.isKeyMoment);
-
-    fetch("/api/explain", {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        mode: "storyline",
-        payload: {
-          whiteName: analysis.headers.White || "White",
-          blackName: analysis.headers.Black || "Black",
-          result: analysis.headers.Result || "*",
-          openingName: analysis.opening.opening?.name,
-          whiteAccuracy: analysis.summary.white.accuracy,
-          blackAccuracy: analysis.summary.black.accuracy,
-          whiteElo: analysis.summary.white.estimatedElo,
-          blackElo: analysis.summary.black.estimatedElo,
-          coachFor: coachColor === "black" ? "Black" : "White",
-          phaseAccuracies: {
-            opening: {
-              white: analysis.summary.white.phaseAccuracies.opening,
-              black: analysis.summary.black.phaseAccuracies.opening,
-            },
-            middlegame: {
-              white: analysis.summary.white.phaseAccuracies.middlegame,
-              black: analysis.summary.black.phaseAccuracies.middlegame,
-            },
-            endgame: {
-              white: analysis.summary.white.phaseAccuracies.endgame,
-              black: analysis.summary.black.phaseAccuracies.endgame,
-            },
-          },
-          phaseMoveCounts: {
-            opening: {
-              white: analysis.summary.white.phaseMoveCounts?.opening ?? 0,
-              black: analysis.summary.black.phaseMoveCounts?.opening ?? 0,
-            },
-            middlegame: {
-              white: analysis.summary.white.phaseMoveCounts?.middlegame ?? 0,
-              black: analysis.summary.black.phaseMoveCounts?.middlegame ?? 0,
-            },
-            endgame: {
-              white: analysis.summary.white.phaseMoveCounts?.endgame ?? 0,
-              black: analysis.summary.black.phaseMoveCounts?.endgame ?? 0,
-            },
-          },
-          keyMomentCount: analysis.moves.filter((m) => m.classification.isKeyMoment).length,
-          turningPointMove: turningMove
-            ? `${turningMove.moveNumber}${turningMove.color === "w" ? "." : "..."} ${turningMove.san}`
-            : undefined,
-          personaId,
+    const storyPayload: GameStorylineRequest = {
+      whiteName: analysis.headers.White || "White",
+      blackName: analysis.headers.Black || "Black",
+      result: analysis.headers.Result || "*",
+      openingName: analysis.opening.opening?.name,
+      whiteAccuracy: analysis.summary.white.accuracy,
+      blackAccuracy: analysis.summary.black.accuracy,
+      whiteElo: analysis.summary.white.estimatedElo,
+      blackElo: analysis.summary.black.estimatedElo,
+      coachFor: coachColor === "black" ? "Black" : "White",
+      phaseAccuracies: {
+        opening: {
+          white: analysis.summary.white.phaseAccuracies.opening,
+          black: analysis.summary.black.phaseAccuracies.opening,
         },
-      }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
+        middlegame: {
+          white: analysis.summary.white.phaseAccuracies.middlegame,
+          black: analysis.summary.black.phaseAccuracies.middlegame,
+        },
+        endgame: {
+          white: analysis.summary.white.phaseAccuracies.endgame,
+          black: analysis.summary.black.phaseAccuracies.endgame,
+        },
+      },
+      phaseMoveCounts: {
+        opening: {
+          white: analysis.summary.white.phaseMoveCounts?.opening ?? 0,
+          black: analysis.summary.black.phaseMoveCounts?.opening ?? 0,
+        },
+        middlegame: {
+          white: analysis.summary.white.phaseMoveCounts?.middlegame ?? 0,
+          black: analysis.summary.black.phaseMoveCounts?.middlegame ?? 0,
+        },
+        endgame: {
+          white: analysis.summary.white.phaseMoveCounts?.endgame ?? 0,
+          black: analysis.summary.black.phaseMoveCounts?.endgame ?? 0,
+        },
+      },
+      keyMomentCount: analysis.moves.filter((m) => m.classification.isKeyMoment).length,
+      turningPointMove: turningMove
+        ? `${turningMove.moveNumber}${turningMove.color === "w" ? "." : "..."} ${turningMove.san}`
+        : undefined,
+      personaId,
+    };
+
+    const storylinePromise =
+      process.env.NEXT_PUBLIC_STATIC_EXPORT === "true"
+        ? Promise.resolve(buildOfflineGameStoryline(storyPayload))
+        : fetch("/api/explain", {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mode: "storyline",
+              payload: storyPayload,
+            }),
+          }).then((r) => (r.ok ? r.json() : null));
+
+    storylinePromise
       .then((story) => {
         if (!controller.signal.aborted && story) {
           setStoryline(story);
@@ -322,36 +333,41 @@ export default function GameReviewPage() {
     const coachFor: "White" | "Black" = coachColor === "black" ? "Black" : "White";
 
     const controller = new AbortController();
+    const movePayload: CoachExplanationRequest = {
+      moveSan: activeMove.san,
+      playedBy: activeMove.color === "w" ? "White" : "Black",
+      coachFor,
+      playerName: coachFor === "White" ? whitePlayerName : blackPlayerName,
+      opponentName: coachFor === "White" ? blackPlayerName : whitePlayerName,
+      moveNumber: activeMove.moveNumber,
+      badge: activeMove.classification.badge,
+      openingName: analysis.opening.opening?.name,
+      evalBefore: prevMoveObj?.evalLabel ?? analysis.startEval?.evalLabel ?? "+0.2",
+      evalAfter: activeMove.evalLabel,
+      deltaWP: activeMove.classification.deltaWP,
+      engineBestMove: activeMove.bestMoveSan,
+      bestMovePV: activeMove.bestMovePvSan,
+      refutationPV: activeMove.refutationPvSan ?? [],
+      tacticalContext: activeMove.tacticalContext,
+      personaId,
+      fenBefore: activeMove.fenBefore,
+      fenAfter: activeMove.fenAfter,
+    };
 
-    fetch("/api/explain", {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        mode: "move",
-        payload: {
-          moveSan: activeMove.san,
-          playedBy: activeMove.color === "w" ? "White" : "Black",
-          coachFor,
-          playerName: coachFor === "White" ? whitePlayerName : blackPlayerName,
-          opponentName: coachFor === "White" ? blackPlayerName : whitePlayerName,
-          moveNumber: activeMove.moveNumber,
-          badge: activeMove.classification.badge,
-          openingName: analysis.opening.opening?.name,
-          evalBefore: prevMoveObj?.evalLabel ?? analysis.startEval?.evalLabel ?? "+0.2",
-          evalAfter: activeMove.evalLabel,
-          deltaWP: activeMove.classification.deltaWP,
-          engineBestMove: activeMove.bestMoveSan,
-          bestMovePV: activeMove.bestMovePvSan,
-          refutationPV: activeMove.refutationPvSan ?? [],
-          tacticalContext: activeMove.tacticalContext,
-          personaId,
-          fenBefore: activeMove.fenBefore,
-          fenAfter: activeMove.fenAfter,
-        },
-      }),
-    })
-      .then((res) => (res.ok ? res.json() : null))
+    const explainPromise =
+      process.env.NEXT_PUBLIC_STATIC_EXPORT === "true"
+        ? Promise.resolve(buildOfflineMoveExplanation(movePayload))
+        : fetch("/api/explain", {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mode: "move",
+              payload: movePayload,
+            }),
+          }).then((res) => (res.ok ? res.json() : null));
+
+    explainPromise
       .then((data) => {
         if (controller.signal.aborted) return;
         if (data) {

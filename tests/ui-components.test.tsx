@@ -703,5 +703,62 @@ describe("UI components & visual geometry", () => {
       expect(evalClasses).toContain("sm:w-7");
       expect(evalClasses).not.toContain("w-7");
     });
+
+    it("UsernameImporter staticExport mode fetches directly from Chess.com PubAPI without /api/chesscom", async () => {
+      const urls: string[] = [];
+      globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+        const u = String(url);
+        urls.push(u);
+        if (u.endsWith("/player/olusheki")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              username: "olusheki",
+              status: "basic",
+              followers: 3,
+            }),
+          } as Response;
+        }
+        if (u.endsWith("/player/olusheki/games/archives")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              archives: ["https://api.chess.com/pub/player/olusheki/games/2026/11"],
+            }),
+          } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            games: [
+              {
+                url: "https://chess.com/game/1",
+                pgn: "1. e4 e5 1-0",
+                time_control: "600",
+                end_time: 1700000100,
+                rated: true,
+                time_class: "rapid",
+                rules: "chess",
+                white: { username: "olusheki", rating: 450, result: "win" },
+                black: { username: "OpponentX", rating: 440, result: "resigned" },
+              },
+            ],
+          }),
+        } as Response;
+      }) as unknown as typeof fetch;
+
+      render(<UsernameImporter onSelectGame={vi.fn()} staticExport={true} />);
+      const input = screen.getByLabelText("Chess.com username");
+      fireEvent.change(input, { target: { value: "olusheki" } });
+      fireEvent.submit(input.closest("form")!);
+
+      await screen.findByText("olusheki");
+      await screen.findByText(/OpponentX/i);
+      expect(urls.every((u) => u.startsWith("https://api.chess.com/pub/"))).toBe(true);
+      expect(urls.some((u) => u.includes("/api/chesscom"))).toBe(false);
+    });
   });
 });

@@ -46,9 +46,10 @@ export function createBrowserStockfishEngine(): ChessEngine {
     if (worker) return worker;
 
     const threaded = canUseThreads();
+    const basePath = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(/\/$/, "");
     const workerUrl = threaded
-      ? "/stockfish/stockfish-17.1-lite-51f59da.js"
-      : "/stockfish/stockfish-17.1-lite-single-03e3232.js";
+      ? `${basePath}/stockfish/stockfish-17.1-lite-51f59da.js`
+      : `${basePath}/stockfish/stockfish-17.1-lite-single-03e3232.js`;
 
     worker = new Worker(workerUrl);
     worker.onmessage = (event: MessageEvent<string>) => {
