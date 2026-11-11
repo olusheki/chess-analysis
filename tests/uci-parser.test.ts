@@ -4,6 +4,7 @@ import {
   uciScoreToWhiteCentipawns,
   uciScoreToActiveCentipawns,
   uciPvToSan,
+  formatEvalLabel,
 } from "@/lib/engine/uci-parser";
 
 describe("uci-parser & Stockfish perspective normalization", () => {
@@ -66,5 +67,20 @@ describe("uci-parser & Stockfish perspective normalization", () => {
     const promoFen = "r6k/4P3/8/8/8/8/8/4K3 w - - 0 40";
     const san = uciPvToSan(promoFen, ["e7e8q"]);
     expect(san).toEqual(["e8=Q+"]);
+  });
+
+  it("treats UCI score mate 0 as mated (-10000 cp)", () => {
+    const mated = parseUciInfoLine("info depth 1 multipv 1 score mate 0 pv e1d1");
+    expect(mated?.cp).toBe(-10000);
+    expect(mated?.mate).toBe(0);
+  });
+
+  it("formats eval labels for cp, forced mate, and delivered checkmate (#)", () => {
+    expect(formatEvalLabel(180)).toBe("+1.8");
+    expect(formatEvalLabel(-42)).toBe("-0.4");
+    expect(formatEvalLabel(2)).toBe("0.0");
+    expect(formatEvalLabel(10000, 3)).toBe("M3");
+    expect(formatEvalLabel(-10000, -2)).toBe("-M2");
+    expect(formatEvalLabel(10000, 1, true)).toBe("#");
   });
 });

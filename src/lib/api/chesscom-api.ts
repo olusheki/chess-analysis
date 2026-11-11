@@ -47,6 +47,15 @@ export interface FormattedGameListItem {
   pgn: string;
 }
 
+export class ChessComApiError extends Error {
+  status: number;
+  constructor(message: string, status: number = 502) {
+    super(message);
+    this.name = "ChessComApiError";
+    this.status = status;
+  }
+}
+
 export class ChessComApiService {
   private static readonly BASE_URL = "https://api.chess.com/pub";
   private static readonly HEADERS = {
@@ -58,24 +67,22 @@ export class ChessComApiService {
    * Fetches player profile information (avatar, status, title)
    */
   static async getPlayerProfile(username: string): Promise<ChessComPlayerProfile | null> {
-    try {
-      const normalized = username.trim().toLowerCase();
-      if (!normalized) return null;
-      const sanitized = encodeURIComponent(normalized);
-      const res = await fetch(`${this.BASE_URL}/player/${sanitized}`, {
-        headers: this.HEADERS,
-      });
+    const normalized = username.trim().toLowerCase();
+    if (!normalized) return null;
+    const sanitized = encodeURIComponent(normalized);
+    const res = await fetch(`${this.BASE_URL}/player/${sanitized}`, {
+      headers: this.HEADERS,
+    });
 
-      if (!res.ok) {
-        if (res.status === 404) return null;
-        throw new Error(`Failed to fetch player profile: ${res.statusText}`);
-      }
-
-      return await res.json();
-    } catch (error) {
-      console.error(`Error fetching profile for ${username}:`, error);
-      return null;
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      throw new ChessComApiError(
+        `Failed to fetch player profile (${res.status} ${res.statusText})`,
+        res.status
+      );
     }
+
+    return await res.json();
   }
 
   /**
@@ -85,7 +92,7 @@ export class ChessComApiService {
   static async getRecentGames(username: string, limit: number = 15): Promise<FormattedGameListItem[]> {
     const rawUser = username.trim().toLowerCase();
     if (!rawUser) {
-      throw new Error("Username is required");
+      throw new ChessComApiError("Username is required", 400);
     }
     const sanitized = encodeURIComponent(rawUser);
 
@@ -93,8 +100,14 @@ export class ChessComApiService {
       headers: this.HEADERS,
     });
 
+    if (archivesRes.status === 404) {
+      return [];
+    }
     if (!archivesRes.ok) {
-      throw new Error(`Failed to fetch game archives for ${username}`);
+      throw new ChessComApiError(
+        `Failed to fetch game archives for ${username} (${archivesRes.status})`,
+        archivesRes.status
+      );
     }
 
     const { archives }: { archives: string[] } = await archivesRes.json();

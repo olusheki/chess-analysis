@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { BADGE_METADATA, MoveBadge } from "@/lib/analysis/move-classifier";
 import {
   CoachExplanationRequest,
   GameStorylineRequest,
   GeminiCoachService,
 } from "@/lib/ai/gemini-coach";
+
+const VALID_BADGES = new Set<string>(Object.keys(BADGE_METADATA));
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,23 +26,40 @@ export async function POST(request: NextRequest) {
     if (mode === "move") {
       const reqPayload = payload as Partial<CoachExplanationRequest>;
       if (
-        !reqPayload.moveSan ||
-        !reqPayload.badge ||
-        !reqPayload.playedBy ||
-        !reqPayload.tacticalContext
+        typeof reqPayload.moveSan !== "string" ||
+        !reqPayload.moveSan.trim() ||
+        typeof reqPayload.badge !== "string" ||
+        !VALID_BADGES.has(reqPayload.badge) ||
+        (reqPayload.playedBy !== "White" && reqPayload.playedBy !== "Black") ||
+        typeof reqPayload.deltaWP !== "number" ||
+        !Number.isFinite(reqPayload.deltaWP) ||
+        !reqPayload.tacticalContext ||
+        typeof reqPayload.tacticalContext !== "object" ||
+        !Array.isArray(reqPayload.tacticalContext.tags)
       ) {
         return NextResponse.json(
-          { error: "Missing required move explanation fields." },
+          { error: "Missing or invalid move explanation fields." },
           { status: 400 }
         );
       }
-      const explanation = await coach.explainMove(reqPayload as CoachExplanationRequest);
+      const explanation = await coach.explainMove({
+        ...reqPayload,
+        badge: reqPayload.badge as MoveBadge,
+        bestMovePV: Array.isArray(reqPayload.bestMovePV) ? reqPayload.bestMovePV : [],
+      } as CoachExplanationRequest);
       return NextResponse.json(explanation);
     }
 
     if (mode === "storyline") {
       const reqPayload = payload as Partial<GameStorylineRequest>;
-      if (!reqPayload.whiteName || !reqPayload.blackName || !reqPayload.phaseAccuracies) {
+      if (
+        typeof reqPayload.whiteName !== "string" ||
+        typeof reqPayload.blackName !== "string" ||
+        !reqPayload.phaseAccuracies ||
+        !reqPayload.phaseAccuracies.opening ||
+        !reqPayload.phaseAccuracies.middlegame ||
+        !reqPayload.phaseAccuracies.endgame
+      ) {
         return NextResponse.json(
           { error: "Missing required game storyline fields." },
           { status: 400 }

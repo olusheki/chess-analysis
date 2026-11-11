@@ -16,6 +16,7 @@ export interface PositionEval {
   bestMoveSan: string;
   whiteCp: number; // White-perspective centipawns of PV1
   whiteMate?: number; // White-perspective mate of PV1
+  isCheckmate?: boolean;
   lines: PvLine[];
 }
 
@@ -44,6 +45,7 @@ export function evaluateTerminalPosition(fen: string): PositionEval | null {
       bestMoveSan: "",
       whiteCp,
       whiteMate,
+      isCheckmate: true,
       lines: [
         {
           multipv: 1,

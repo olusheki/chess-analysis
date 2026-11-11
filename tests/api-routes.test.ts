@@ -47,16 +47,72 @@ describe("Next.js API route handlers", () => {
       expect(data.opening.eco).toBe("C50");
       expect(data.bookPlies).toBe(5);
     });
+
+    it("C1: returns 200 with bookPlies stopped cleanly on invalid SAN instead of misleading 400 Invalid JSON", async () => {
+      const req = new NextRequest("http://localhost:3000/api/openings", {
+        method: "POST",
+        body: JSON.stringify({ movesSan: ["e4", "Qxh8"] }),
+      });
+      const res = await postOpenings(req);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.bookPlies).toBe(1);
+      expect(data.plyIsBook).toEqual([true, false]);
+    });
   });
 
   describe("/api/explain", () => {
-    it("returns 400 for invalid payload", async () => {
-      const req = new NextRequest("http://localhost:3000/api/explain", {
+    it("returns 400 for invalid payload or malformed tacticalContext/badge", async () => {
+      const req1 = new NextRequest("http://localhost:3000/api/explain", {
         method: "POST",
         body: JSON.stringify({ mode: "move" }),
       });
+      expect((await postExplain(req1)).status).toBe(400);
+
+      const req2 = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "move",
+          payload: {
+            moveSan: "e4",
+            badge: "NotABadge",
+            playedBy: "White",
+            deltaWP: "bad",
+            tacticalContext: {},
+          },
+        }),
+      });
+      expect((await postExplain(req2)).status).toBe(400);
+    });
+
+    it("M3: returns grounded game storyline for mode=storyline", async () => {
+      const req = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "storyline",
+          payload: {
+            whiteName: "Morphy",
+            blackName: "Duke",
+            result: "1-0",
+            openingName: "Philidor Defense",
+            whiteAccuracy: 95.1,
+            blackAccuracy: 71.2,
+            whiteElo: 2600,
+            blackElo: 1700,
+            phaseAccuracies: {
+              opening: { white: 98, black: 85 },
+              middlegame: { white: 94, black: 65 },
+              endgame: { white: 100, black: 100 },
+            },
+            keyMomentCount: 3,
+          },
+        }),
+      });
       const res = await postExplain(req);
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.headline).toBeTruthy();
+      expect(data.summary).toContain("Philidor Defense");
     });
 
     it("returns grounded move explanation in offline mode", async () => {
@@ -143,6 +199,38 @@ describe("Next.js API route handlers", () => {
       expect(data.profile.username).toBe("Hikaru");
       expect(data.games).toHaveLength(1);
       expect(data.games[0].result).toBe("win");
+    });
+
+    it("H7: returns 404 when player/archives do not exist, 429 on rate limits, and 502 on upstream errors", async () => {
+      globalThis.fetch = vi.fn(async () => ({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+      })) as unknown as typeof fetch;
+
+      const req404 = new NextRequest("http://localhost:3000/api/chesscom?username=no_such_player_123");
+      const res404 = await getChessCom(req404);
+      expect(res404.status).toBe(404);
+
+      globalThis.fetch = vi.fn(async () => ({
+        ok: false,
+        status: 429,
+        statusText: "Too Many Requests",
+      })) as unknown as typeof fetch;
+
+      const req429 = new NextRequest("http://localhost:3000/api/chesscom?username=hikaru");
+      const res429 = await getChessCom(req429);
+      expect(res429.status).toBe(429);
+
+      globalThis.fetch = vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        statusText: "Server Error",
+      })) as unknown as typeof fetch;
+
+      const req500 = new NextRequest("http://localhost:3000/api/chesscom?username=hikaru");
+      const res500 = await getChessCom(req500);
+      expect(res500.status).toBe(502);
     });
   });
 });

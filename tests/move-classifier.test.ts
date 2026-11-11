@@ -175,4 +175,117 @@ describe("move-classifier (11 official Chess.com badges)", () => {
     expect(res.isKeyMoment).toBe(true);
     expect(res.isBlunder).toBe(true);
   });
+
+  it("C4: rejects Brilliant when non-best sacrifice drops large centipawns in saturated WP (+1400cp -> +600cp or loses mate)", () => {
+    const res1 = classifyMove(
+      baseInput({
+        materialSacrificed: 3,
+        isBestMove: false,
+        cpBest: 1400,
+        cpPlayed: 600,
+      })
+    );
+    expect(res1.badge).not.toBe("Brilliant");
+
+    const res2 = classifyMove(
+      baseInput({
+        materialSacrificed: 3,
+        isBestMove: false,
+        cpBest: 10000,
+        mateBest: 3,
+        cpPlayed: 500,
+      })
+    );
+    expect(res2.badge).not.toBe("Brilliant");
+  });
+
+  it("H5: classifies hanging Queen or mate-blunder as Blunder (??) rather than Miss (X) even after opponent blundered", () => {
+    const blunderIntoLost = classifyMove(
+      baseInput({
+        prevMoveOpponentDeltaWP: 25.0,
+        cpBest: 250,
+        cpPlayed: -600,
+      })
+    );
+    expect(blunderIntoLost.badge).toBe("Blunder");
+
+    const blunderIntoMate = classifyMove(
+      baseInput({
+        prevMoveOpponentDeltaWP: 25.0,
+        cpBest: 250,
+        cpPlayed: -10000,
+        matePlayed: -1,
+      })
+    );
+    expect(blunderIntoMate.badge).toBe("Blunder");
+  });
+
+  it("M2: requires PV2 to drop out of clearly winning territory for Great (!) and detects Forced mate-escape", () => {
+    // +350cp -> +150cp (80% WP) is still comfortably winning, so PV1 is Best, not Great
+    const comfortable = classifyMove(
+      baseInput({
+        isBestMove: true,
+        cpBest: 350,
+        cpPlayed: 350,
+        cpPV2: 150,
+      })
+    );
+    expect(comfortable.badge).toBe("Best");
+
+    // Multiple legal moves, only PV1 avoids immediate mate (-M1)
+    const forcedEscape = classifyMove(
+      baseInput({
+        legalMoveCount: 10,
+        isBestMove: true,
+        cpBest: 0,
+        cpPlayed: 0,
+        cpPV2: -10000,
+        matePV2: -1,
+      })
+    );
+    expect(forcedEscape.badge).toBe("Forced");
+  });
+
+  it("validates BADGE_METADATA completeness, wpPV2 < 48 Great trigger, and single-legal Forced moves", () => {
+    for (const key of [
+      "Brilliant",
+      "Great",
+      "Best",
+      "Excellent",
+      "Good",
+      "Book",
+      "Inaccuracy",
+      "Mistake",
+      "Miss",
+      "Blunder",
+      "Forced",
+    ] as const) {
+      expect(BADGE_METADATA[key].color.startsWith("#")).toBe(true);
+      expect(BADGE_METADATA[key].symbol.length).toBeGreaterThan(0);
+      expect(typeof BADGE_METADATA[key].priority).toBe("number");
+    }
+
+    // Great via wpPV2 < 48.0 even when wpBest - wpPV2 is ~13.6% (< 15%)
+    const greatLowAlt = classifyMove(
+      baseInput({
+        isBestMove: true,
+        cpBest: 50, // wpBest ~61.3%
+        cpPlayed: 50,
+        cpPV2: -15, // wpPV2 ~46.5%
+      })
+    );
+    expect(greatLowAlt.badge).toBe("Great");
+
+    // Single legal move with bad evaluation stays Forced with 100% accuracy
+    const onlyMove = classifyMove(
+      baseInput({
+        legalMoveCount: 1,
+        cpBest: 0,
+        cpPlayed: -500,
+      })
+    );
+    expect(onlyMove.badge).toBe("Forced");
+    expect(onlyMove.deltaWP).toBe(0);
+    expect(onlyMove.accuracy).toBe(100.0);
+  });
 });

@@ -14,8 +14,22 @@ export function createBrowserStockfishEngine(): ChessEngine {
   let worker: Worker | null = null;
   let initialized = false;
   let currentListeners: ((line: string) => void)[] = [];
+  const pendingCleanups = new Set<(err: Error) => void>();
   let queue: Promise<void> = Promise.resolve();
   let disposed = false;
+
+  function makeAbortError(msg: string): Error {
+    const err = new Error(msg);
+    err.name = "AbortError";
+    return err;
+  }
+
+  function rejectAllPending(err: Error) {
+    for (const rejectPending of [...pendingCleanups]) {
+      rejectPending(err);
+    }
+    pendingCleanups.clear();
+  }
 
   function canUseThreads(): boolean {
     return (
@@ -27,7 +41,7 @@ export function createBrowserStockfishEngine(): ChessEngine {
 
   function ensureWorker(): Worker {
     if (disposed) {
-      throw new Error("Stockfish worker has been disposed");
+      throw makeAbortError("Stockfish worker has been disposed");
     }
     if (worker) return worker;
 
@@ -47,6 +61,9 @@ export function createBrowserStockfishEngine(): ChessEngine {
         }
       }
     };
+    worker.onerror = () => {
+      rejectAllPending(new Error("Stockfish Web Worker encountered a fatal error"));
+    };
     return worker;
   }
 
@@ -59,8 +76,24 @@ export function createBrowserStockfishEngine(): ChessEngine {
     onLine?: (line: string) => void,
     timeoutMs = 20000
   ): Promise<string> {
+    if (disposed) {
+      return Promise.reject(makeAbortError("Stockfish worker has been disposed"));
+    }
+
     return new Promise((resolve, reject) => {
+      const rejectPending = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+
       const timer = setTimeout(() => {
+        if (!disposed && worker) {
+          try {
+            worker.postMessage("stop");
+          } catch {
+            // ignore
+          }
+        }
         cleanup();
         reject(new Error("Stockfish Web Worker timed out"));
       }, timeoutMs);
@@ -76,8 +109,10 @@ export function createBrowserStockfishEngine(): ChessEngine {
       function cleanup() {
         clearTimeout(timer);
         currentListeners = currentListeners.filter((l) => l !== handler);
+        pendingCleanups.delete(rejectPending);
       }
 
+      pendingCleanups.add(rejectPending);
       currentListeners.push(handler);
     });
   }
@@ -106,7 +141,7 @@ export function createBrowserStockfishEngine(): ChessEngine {
       if (terminal) return Promise.resolve(terminal);
 
       const run = queue.then(async () => {
-        if (disposed) throw new Error("Engine disposed");
+        if (disposed) throw makeAbortError("Engine disposed");
         await initIfNeeded(multiPv);
         const infoLines: string[] = [];
         const bestPromise = waitForLine(
@@ -142,6 +177,7 @@ export function createBrowserStockfishEngine(): ChessEngine {
         worker = null;
       }
       currentListeners = [];
+      rejectAllPending(makeAbortError("Stockfish worker disposed"));
     },
   };
 }

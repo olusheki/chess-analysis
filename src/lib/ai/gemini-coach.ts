@@ -24,6 +24,7 @@ export interface CoachExplanationRequest {
   refutationPV?: string[];
   tacticalContext: TacticalContext;
   personaId?: CoachPersonaId;
+  fenBefore?: string;
   fenAfter?: string;
 }
 
@@ -202,7 +203,7 @@ Analyze this move:
 - Evaluation Before: ${req.evalBefore} -> Evaluation After: ${req.evalAfter} (ΔWP: ${req.deltaWP.toFixed(1)}%)
 - Opening: ${req.openingName || "Standard Opening"}
 - Tactical Tags: ${req.tacticalContext.tags.join(", ") || "None"}
-${req.tacticalContext.hangingPieceDetails ? `- HUNG PIECE: ${req.tacticalContext.hangingPieceDetails.piece} on ${req.tacticalContext.hangingPieceDetails.square}` : ""}
+${req.tacticalContext.hangingPieceDetails ? `- ${req.badge === "Brilliant" ? "SACRIFICED PIECE" : "HUNG PIECE"}: ${req.tacticalContext.hangingPieceDetails.piece} on ${req.tacticalContext.hangingPieceDetails.square}` : ""}
 ${req.tacticalContext.forkTargets ? `- FORK TARGETS: ${req.tacticalContext.forkTargets.map((t) => `${t.piece} on ${t.square}`).join(", ")}` : ""}
 ${req.tacticalContext.pinnedPieceDetails ? `- PINNED PIECE: ${req.tacticalContext.pinnedPieceDetails.piece} on ${req.tacticalContext.pinnedPieceDetails.square} pinned to ${req.tacticalContext.pinnedPieceDetails.pinnedTo}` : ""}
 ${req.tacticalContext.skeweredPieceDetails ? `- SKEWER: ${req.tacticalContext.skeweredPieceDetails.frontPiece} on ${req.tacticalContext.skeweredPieceDetails.frontSquare} in front of ${req.tacticalContext.skeweredPieceDetails.backPiece} on ${req.tacticalContext.skeweredPieceDetails.backSquare}` : ""}
@@ -223,11 +224,17 @@ ${req.refutationPV ? `- Opponent Refutation Line: ${req.refutationPV.slice(0, 4)
       });
 
       const parsed: CoachExplanationResponse = JSON.parse(response.text!);
-      if (req.fenAfter) {
-        const grounding = validateExplanationGrounding(
-          `${parsed.shortComment} ${parsed.detailedExplanation}`,
-          req.fenAfter
-        );
+      const referenceFens = [req.fenAfter, req.fenBefore].filter(
+        (f): f is string => Boolean(f)
+      );
+      if (referenceFens.length > 0) {
+        const fullText = [
+          parsed.shortComment,
+          parsed.detailedExplanation,
+          parsed.bestMoveReasoning ?? "",
+          parsed.coachingTip ?? "",
+        ].join(" ");
+        const grounding = validateExplanationGrounding(fullText, ...referenceFens);
         if (!grounding.valid) {
           return this.generateOfflineFallbackExplanation(req);
         }
@@ -279,23 +286,20 @@ Return an encouraging, factual 2-3 sentence summary and 1 takeaway per side.
 
   private generateOfflineStoryline(req: GameStorylineRequest): GameStorylineResponse {
     const openingLabel = req.openingName || "the opening";
-    const winner =
-      req.result === "1-0"
-        ? req.whiteName
-        : req.result === "0-1"
-        ? req.blackName
-        : "Neither side";
-
     const headline =
-      req.result === "1/2-1/2"
+      req.result === "1-0"
+        ? `${req.whiteName} takes the victory with ${req.whiteAccuracy}% accuracy`
+        : req.result === "0-1"
+        ? `${req.blackName} takes the victory with ${req.blackAccuracy}% accuracy`
+        : req.result === "1/2-1/2"
         ? `Hard-fought draw in ${openingLabel}`
-        : `${winner} takes the victory with ${req.result === "1-0" ? req.whiteAccuracy : req.blackAccuracy}% accuracy`;
+        : `Balanced battle in ${openingLabel} (${req.whiteAccuracy}% vs ${req.blackAccuracy}%)`;
 
     const turningNote = req.turningPointMove
       ? ` The critical turning point came around ${req.turningPointMove}.`
       : "";
 
-    const summary = `In ${openingLabel}, White posted ${req.whiteAccuracy}% overall CAPS2 accuracy (est. ${req.whiteElo}) against Black's ${req.blackAccuracy}% (est. ${req.blackElo}). White averaged ${req.phaseAccuracies.opening.white}% in the opening and ${req.phaseAccuracies.middlegame.white}% in the middlegame.${turningNote}`;
+    const summary = `In ${openingLabel}, White (${req.whiteName}) posted ${req.whiteAccuracy}% overall CAPS2 accuracy (est. ${req.whiteElo}) against Black (${req.blackName}) at ${req.blackAccuracy}% (est. ${req.blackElo}). Phase accuracy (W/B): Opening ${req.phaseAccuracies.opening.white}%/${req.phaseAccuracies.opening.black}%, Middlegame ${req.phaseAccuracies.middlegame.white}%/${req.phaseAccuracies.middlegame.black}%, Endgame ${req.phaseAccuracies.endgame.white}%/${req.phaseAccuracies.endgame.black}%.${turningNote}`;
 
     const whiteTakeaway =
       req.whiteAccuracy >= 85

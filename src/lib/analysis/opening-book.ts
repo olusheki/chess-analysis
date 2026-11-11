@@ -57,14 +57,32 @@ export function lookupOpeningByFen(fen: string): OpeningMatch | null {
   };
 }
 
+const STANDARD_START_FEN_KEY = normalizeFenKey(
+  "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+);
+
 /**
  * Classifies all moves of a game against the ECO opening database,
  * detecting transpositions and the exact ply where the game exits book theory.
  */
 export function classifyGameOpenings(
   movesSan: string[],
-  maxBookPly: number = 30
+  maxBookPly: number = 30,
+  startFen?: string
 ): GameOpeningAnalysis {
+  if (startFen && normalizeFenKey(startFen) !== STANDARD_START_FEN_KEY) {
+    return {
+      opening: null,
+      bookPlies: 0,
+      outOfBookPly: movesSan.length > 0 ? 1 : null,
+      outOfBookMoveNumber: movesSan.length > 0 ? 1 : null,
+      plyIsBook: movesSan.map(() => false),
+      plyOpenings: movesSan.map(() => null),
+      insight:
+        "Custom starting position; opening book classification applies only from the standard initial setup.",
+    };
+  }
+
   const chess = new Chess();
   const plyIsBook: boolean[] = [];
   const plyOpenings: (OpeningMatch | null)[] = [];
@@ -75,7 +93,12 @@ export function classifyGameOpenings(
   let outOfBookPly: number | null = null;
 
   for (let i = 0; i < movesSan.length; i++) {
-    const move = chess.move(movesSan[i]);
+    let move;
+    try {
+      move = chess.move(movesSan[i]);
+    } catch {
+      move = null;
+    }
     if (!move) {
       plyIsBook.push(false);
       plyOpenings.push(null);

@@ -25,11 +25,14 @@ export interface MoveEvalData {
 export function centipawnsToWinProbability(cp: number, mate?: number): number {
   if (mate !== undefined && mate !== 0) {
     if (mate > 0) {
-      // White/Active player has forced mate
-      return Math.max(99.0, 100.0 - (mate * 0.1));
+      // +M1..+M3 = 100.0%, longer forced mates decay gently above 99.1%
+      if (mate <= 3) return 100.0;
+      return Math.max(99.1, 99.9 - mate * 0.05);
     } else {
-      // Opponent has forced mate
-      return Math.min(1.0, Math.abs(mate) * 0.1);
+      // -M1..-M3 = 0.0%, longer forced mates against player stay below 0.9%
+      const absMate = Math.abs(mate);
+      if (absMate <= 3) return 0.0;
+      return Math.min(0.9, 0.1 + absMate * 0.05);
     }
   }
 
@@ -51,6 +54,12 @@ export function calculateWinProbabilityDelta(
 ): { wpBest: number; wpPlayed: number; deltaWP: number } {
   const wpBest = centipawnsToWinProbability(cpBest, mateBest);
   const wpPlayed = centipawnsToWinProbability(cpPlayed, matePlayed);
+
+  // Converting a finite centipawn lead into a forced mate is never a win-probability loss
+  if (matePlayed !== undefined && matePlayed > 0 && mateBest === undefined) {
+    return { wpBest, wpPlayed, deltaWP: 0 };
+  }
+
   const deltaWP = Math.max(0, wpBest - wpPlayed);
 
   return { wpBest, wpPlayed, deltaWP };

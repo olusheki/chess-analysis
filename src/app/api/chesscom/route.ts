@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ChessComApiService } from "@/lib/api/chesscom-api";
+import { ChessComApiError, ChessComApiService } from "@/lib/api/chesscom-api";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -30,6 +30,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ profile, games });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to fetch Chess.com games";
-    return NextResponse.json({ error: message }, { status: 502 });
+    const status =
+      error instanceof ChessComApiError && error.status === 429 ? 429 : 502;
+    return NextResponse.json({ error: message }, { status });
   }
 }

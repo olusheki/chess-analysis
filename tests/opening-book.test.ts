@@ -75,4 +75,35 @@ describe("opening-book (ECO classifier & transposition matcher)", () => {
     const byFen = lookupOpeningByFen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1");
     expect(byFen?.eco).toBe("B00");
   });
+
+  it("C1: handles invalid SAN moves gracefully without throwing", () => {
+    const res = classifyGameOpenings(["e4", "Qxh8", "Nf3"]);
+    expect(res.bookPlies).toBe(1);
+    expect(res.outOfBookPly).toBe(2);
+    expect(res.plyIsBook).toEqual([true, false, false]);
+  });
+
+  it("C1: skips opening book lookup when starting from a custom FEN", () => {
+    const customFen = "r5k1/4Pppp/8/8/8/8/8/4R1K1 w - - 0 40";
+    const res = classifyGameOpenings(["e8=Q+", "Rxe8", "Rxe8#"], 30, customFen);
+    expect(res.opening).toBeNull();
+    expect(res.bookPlies).toBe(0);
+    expect(res.plyIsBook).toEqual([false, false, false]);
+  });
+
+  it("handles empty queries, ECO D/E/default insights, and tracks out-of-book ply transitions", () => {
+    expect(searchOpenings("   ", 10)).toEqual([]);
+    expect(getOpeningInsight("D00", "Generic D System").toLowerCase()).toContain("d4/d5");
+    expect(getOpeningInsight("E00", "Generic E System").toLowerCase()).toContain("hypermodern");
+    expect(getOpeningInsight("C20", "Generic Open Game").toLowerCase()).toContain("classical");
+    expect(getOpeningInsight("B00", "Generic Semi-Open").toLowerCase()).toContain("asymmetrically");
+    expect(getOpeningInsight("Z99", "Custom System").toLowerCase()).toContain("harmonious");
+
+    const seq = ["e4", "e5", "Nf3", "Nc6", "a3"]; // Leaves Ruy/Italian book at 3. a3 (ply 5)
+    const out = classifyGameOpenings(seq, 30);
+    expect(out.bookPlies).toBe(4);
+    expect(out.outOfBookPly).toBe(5);
+    expect(out.outOfBookMoveNumber).toBe(3);
+    expect(out.plyIsBook).toEqual([true, true, true, true, false]);
+  });
 });

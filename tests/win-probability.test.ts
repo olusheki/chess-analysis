@@ -30,22 +30,27 @@ describe("win-probability engine math", () => {
       expect(centipawnsToWinProbability(-1000)).toBeLessThan(1);
     });
 
-    it("handles forced positive mates between 99% and 100%", () => {
+    it("handles forced positive mates: +M1..+M3 = 100%, +M4..+M10 above high cp evals", () => {
       const m1 = centipawnsToWinProbability(0, 1);
       const m3 = centipawnsToWinProbability(0, 3);
+      const m6 = centipawnsToWinProbability(0, 6);
       const m15 = centipawnsToWinProbability(0, 15);
-      expect(m1).toBeCloseTo(99.9, 3);
-      expect(m3).toBeCloseTo(99.7, 3);
-      expect(m15).toBe(99.0);
+      expect(m1).toBe(100.0);
+      expect(m3).toBe(100.0);
+      expect(m6).toBeGreaterThan(99.5);
+      expect(m6).toBeLessThan(100.0);
+      expect(m15).toBeGreaterThan(99.0);
+      expect(m3).toBeGreaterThan(centipawnsToWinProbability(700));
     });
 
-    it("handles forced negative mates between 0% and 1%", () => {
+    it("handles forced negative mates: -M1..-M3 = 0%, longer negative mates near 0%", () => {
       const mNeg1 = centipawnsToWinProbability(0, -1);
       const mNeg3 = centipawnsToWinProbability(0, -3);
       const mNeg15 = centipawnsToWinProbability(0, -15);
-      expect(mNeg1).toBeCloseTo(0.1, 3);
-      expect(mNeg3).toBeCloseTo(0.3, 3);
-      expect(mNeg15).toBe(1.0);
+      expect(mNeg1).toBe(0.0);
+      expect(mNeg3).toBe(0.0);
+      expect(mNeg15).toBeGreaterThan(0);
+      expect(mNeg15).toBeLessThan(1.0);
     });
   });
 
@@ -65,6 +70,11 @@ describe("win-probability engine math", () => {
     it("detects massive deltaWP when blundering a mate", () => {
       const { deltaWP } = calculateWinProbabilityDelta(300, 0, undefined, -2);
       expect(deltaWP).toBeGreaterThan(90);
+    });
+
+    it("yields 0 deltaWP when converting a huge finite cp advantage into a forced mate", () => {
+      const { deltaWP } = calculateWinProbabilityDelta(850, 10000, undefined, 5);
+      expect(deltaWP).toBe(0);
     });
   });
 
@@ -128,6 +138,18 @@ describe("win-probability engine math", () => {
     it("clamps estimated rating between 400 and 2900", () => {
       expect(estimatePerformanceRating(0, 10, 10)).toBe(400);
       expect(estimatePerformanceRating(100, 0, 0)).toBe(2850);
+    });
+
+    it("handles mate === 0 fallback, very deep mates (-M25 / +M25), and boundary move accuracy", () => {
+      expect(centipawnsToWinProbability(100, 0)).toBeCloseTo(
+        centipawnsToWinProbability(100),
+        6
+      );
+      expect(centipawnsToWinProbability(0, 25)).toBeCloseTo(99.1, 2);
+      expect(centipawnsToWinProbability(0, -25)).toBeCloseTo(0.9, 2);
+      expect(calculateMoveAccuracy(0.001)).toBe(100.0);
+      expect(calculateMoveAccuracy(0.02)).toBeLessThan(100.0);
+      expect(calculateWinProbabilityDelta(0, 0, undefined, 0).deltaWP).toBe(0);
     });
   });
 });

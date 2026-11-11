@@ -52,4 +52,35 @@ describe("sacrifice-detector (real material sacrifice calculation)", () => {
     const sac = calculateMaterialSacrifice(fen, "Rxf6");
     expect(sac).toBe(2);
   });
+
+  it("C3: does NOT inflate promotion moves like e8=Q+ into sacrifices when promotion gain covers recapture", () => {
+    // 40. e8=Q+ Rxe8 41. Rxe8# — pawn promotes and wins the exchange (+4), NOT a sacrifice!
+    const fen = "r5k1/4Pppp/8/8/8/8/8/4R1K1 w - - 0 40";
+    expect(calculateMaterialSacrifice(fen, "e8=Q+")).toBe(0);
+
+    // Even when e8=Q+ is captured with no recapture, at most the original 1-point pawn was lost (< 2)
+    const unrecapturedFen = "r5k1/4Pppp/8/8/8/8/8/6K1 w - - 0 40";
+    expect(calculateMaterialSacrifice(unrecapturedFen, "e8=Q+")).toBeLessThanOrEqual(1);
+  });
+
+  it("C3: ranks Queen promotion above Knight underpromotion during SEE recapture calculations", () => {
+    // White Qxd1 (Qd3 takes Bd1=3). Black replies cxd1=Q (+17), White Rd8xd1 (9), Black Raxd1 (5) -> Black net SEE = 13 -> net sac = 10
+    const promoRecaptureFen = "3R4/7k/8/8/8/3Q4/2p4K/r2b4 w - - 0 30";
+    expect(calculateMaterialSacrifice(promoRecaptureFen, "Qxd1")).toBe(10);
+  });
+
+  it("C4: does NOT count a pre-existing hanging piece as newly sacrificed by an unrelated move", () => {
+    // White Nc2 is ALREADY attacked by Black pawn on d3 before White plays Qa1 (Qf1 did not defend c2)
+    const fen = "4k3/8/8/8/8/3p4/2N5/5Q1K w - - 0 30";
+    expect(calculateMaterialSacrifice(fen, "Qa1")).toBe(0);
+  });
+
+  it("handles invalid SAN moves gracefully and detects newly exposed high-value pieces (discovered hang)", () => {
+    expect(calculateMaterialSacrifice("4k3/8/8/8/8/8/8/4K3 w - - 0 1", "Qxh8")).toBe(0);
+
+    // White Bd2 shields White Rd1 from Black Bd4? No, Rook Re2 shields Queen Qe1 from Black Re8!
+    // Before 1. Rf2: Qe1 was shielded by Re2; after 1. Rf2, Qe1 is newly hanging to Re8 (loss 9)!
+    const exposedFen = "4r1k1/8/8/8/8/8/4R3/4Q1K1 w - - 0 30";
+    expect(calculateMaterialSacrifice(exposedFen, "Rf2")).toBe(9);
+  });
 });

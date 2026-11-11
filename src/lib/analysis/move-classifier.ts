@@ -78,8 +78,10 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
     return createResult("Book", 0);
   }
 
-  // 2. Forced Move Check (Only 1 legal move)
-  if (legalMoveCount === 1) {
+  // 2. Forced Move Check (Only 1 legal move, or only PV1 escapes immediate checkmate)
+  const onlyMoveEscapesMate =
+    isBestMove && (mateBest === undefined || mateBest > 0) && matePV2 === -1;
+  if (legalMoveCount === 1 || onlyMoveEscapesMate) {
     return createResult("Forced", 0);
   }
 
@@ -93,9 +95,14 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
   // 3. Brilliant Move (!!)
   // Criteria:
   // - Sacrifices significant material (>= 2 pawns or piece)
-  // - Matches PV1 or deltaWP is negligible (<= 1.0%)
+  // - Matches PV1 or negligible WP/cp drop (protecting against saturated-WP blunders at >+10 pawns)
   // - Position remains sound / competitive (wpPlayed >= 38%, allowing dynamic equalizing sacrifices like 24. Rxd4!!)
-  if (materialSacrificed >= 2 && (isBestMove || deltaWP <= 1.0) && wpPlayed >= 38.0) {
+  const cpDrop =
+    mateBest === undefined && matePlayed === undefined ? Math.max(0, cpBest - cpPlayed) : 0;
+  const lostMate =
+    mateBest !== undefined && mateBest > 0 && (matePlayed === undefined || matePlayed <= 0);
+  const isNearBestForSac = isBestMove || (deltaWP <= 1.0 && cpDrop <= 35 && !lostMate);
+  if (materialSacrificed >= 2 && isNearBestForSac && wpPlayed >= 38.0) {
     return createResult("Brilliant", deltaWP, true);
   }
 
@@ -103,10 +110,10 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
   // Criteria:
   // - Sole winning move found in a critical position
   // - PV1 keeps high advantage (wpBest >= 60%)
-  // - PV2 collapses advantage significantly (PV2 drops WP by >= 15% or wpPV2 < 50%)
+  // - PV2 drops out of comfortable winning territory (wpPV2 < 55%) with >= 15% WP gap
   if (isBestMove && cpPV2 !== undefined) {
     const wpPV2 = centipawnsToWinProbability(cpPV2, matePV2);
-    if (wpBest >= 60.0 && (wpBest - wpPV2 >= 15.0 || wpPV2 < 48.0)) {
+    if (wpBest >= 60.0 && wpPV2 < 55.0 && (wpBest - wpPV2 >= 15.0 || wpPV2 < 48.0)) {
       return createResult("Great", deltaWP, true);
     }
   }
@@ -116,10 +123,19 @@ export function classifyMove(input: MoveClassificationInput): ClassificationResu
     return createResult("Best", deltaWP);
   }
 
+  // Guard: extreme blunders (>55% WP drop, falling into <30% lost position, or blundering mate)
+  // must always be classified as Blunder rather than Miss even if the opponent previously blundered.
+  const isSevereBlunder =
+    deltaWP > 25.0 &&
+    (deltaWP > 55.0 ||
+      wpPlayed < 30.0 ||
+      (matePlayed !== undefined && matePlayed < 0 && (mateBest === undefined || mateBest >= 0)));
+
   // 6. Miss (X)
   // Opponent blundered on previous turn giving a big tactical opportunity,
-  // but player failed to punish it, dropping win probability significantly.
+  // but player failed to punish it while avoiding a total collapse.
   if (
+    !isSevereBlunder &&
     prevMoveOpponentDeltaWP !== undefined &&
     prevMoveOpponentDeltaWP >= 18.0 &&
     deltaWP >= 15.0 &&

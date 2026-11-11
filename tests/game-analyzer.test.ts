@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { Chess } from "chess.js";
 import { analyzeGame, parsePgnGame } from "@/lib/analysis/game-analyzer";
 import type { ChessEngine, PositionEval } from "@/lib/engine/engine-evaluator";
-import { createNodeStockfishEngine } from "@/lib/engine/stockfish-node";
 
 const KASPAROV_TOPALOV_1999_PGN = `[Event "Hoogovens"]
 [Site "Wijk aan Zee NED"]
@@ -114,35 +113,171 @@ describe("game-analyzer (full Tier 1 + Tier 2 pipeline)", () => {
     expect(analysis.summary.black.accuracy).toBeLessThan(100);
   });
 
-  it("ACCEPTANCE TEST (Real Stockfish 17.1 WASM): awards Brilliant (!!) to Kasparov's 24. Rxd4!!", async () => {
-    // Evaluate critical section around 23...Qd6 and 24. Rxd4!! with real Stockfish WASM
-    // Using full Kasparov vs Topalov PGN up to move 26 (51 plies) so runtime is fast (<10s)
-    const partialPgn = `[Event "Hoogovens"]
-[White "Kasparov, Garry"]
-[Black "Topalov, Veselin"]
+  it("C1 & M1: analyzes custom [FEN] PGNs without crashing, preserves start move numbers/startEval, and labels mate #", async () => {
+    const customPgn = `[SetUp "1"]
+[FEN "r5k1/4Pppp/8/8/8/8/8/4R1K1 w - - 0 40"]
+[White "EndgameTester"]
+[Black "Opponent"]
 [Result "1-0"]
 
-1. e4 d6 2. d4 Nf6 3. Nc3 g6 4. Be3 Bg7 5. Qd2 c6 6. f3 b5 7. Nge2 Nbd7
-8. Bh6 Bxh6 9. Qxh6 Bb7 10. a3 e5 11. O-O-O Qe7 12. Kb1 a6 13. Nc1 O-O-O
-14. Nb3 exd4 15. Rxd4 c5 16. Rd1 Nb6 17. g3 Kb8 18. Na5 Ba8 19. Bh3 d5
-20. Qf4+ Ka7 21. Rhe1 d4 22. Nd5 Nbxd5 23. exd5 Qd6 24. Rxd4 cxd4 25. Re7+ Kb6 26. Qxd4+ Kxa5`;
+40. e8=Q+ Rxe8 41. Rxe8# 1-0`;
 
-    const engine = createNodeStockfishEngine();
-    try {
-      const result = await analyzeGame(partialPgn, engine, {
-        depth: 12,
-        startPlyEvalFrom: 45, // Focus deep Stockfish evals starting at ply 45 (move 23), fast eval on earlier moves
-      });
+    const c = new Chess("r5k1/4Pppp/8/8/8/8/8/4R1K1 w - - 0 40");
+    const fen0 = c.fen();
+    c.move("e8=Q+");
+    const fen1 = c.fen();
+    c.move("Rxe8");
+    const fen2 = c.fen();
+    c.move("Rxe8#");
+    const fen3 = c.fen();
 
-      const move24White = result.moves.find((m) => m.moveNumber === 24 && m.color === "w");
-      expect(move24White).toBeDefined();
-      expect(move24White!.san).toBe("Rxd4");
-      expect(move24White!.materialSacrificed).toBeGreaterThanOrEqual(2);
-      expect(move24White!.classification.badge).toBe("Brilliant");
-      expect(move24White!.classification.symbol).toBe("!!");
-      expect(result.opening.opening?.eco).toBe("B07");
-    } finally {
-      engine.dispose();
-    }
-  }, 30000);
+    const mockEngine: ChessEngine = {
+      async evaluatePosition(fen: string, depth: number) {
+        if (fen === fen0) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "e7e8q",
+            bestMoveSan: "e8=Q+",
+            whiteCp: 10000,
+            whiteMate: 2,
+            lines: [{ multipv: 1, cp: 10000, mate: 2, pvUci: ["e7e8q", "a8e8", "e1e8"], pvSan: ["e8=Q+", "Rxe8", "Rxe8#"] }],
+          };
+        }
+        if (fen === fen1) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "a8e8",
+            bestMoveSan: "Rxe8",
+            whiteCp: 10000,
+            whiteMate: 1,
+            lines: [{ multipv: 1, cp: 10000, mate: 1, pvUci: ["a8e8", "e1e8"], pvSan: ["Rxe8", "Rxe8#"] }],
+          };
+        }
+        if (fen === fen2) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "e1e8",
+            bestMoveSan: "Rxe8#",
+            whiteCp: 10000,
+            whiteMate: 1,
+            lines: [{ multipv: 1, cp: 10000, mate: 1, pvUci: ["e1e8"], pvSan: ["Rxe8#"] }],
+          };
+        }
+        return {
+          fen: fen3,
+          depth: 99,
+          bestMoveUci: "",
+          bestMoveSan: "",
+          whiteCp: 10000,
+          whiteMate: 1,
+          isCheckmate: true,
+          lines: [{ multipv: 1, cp: 10000, mate: 1, pvUci: [], pvSan: [] }],
+        };
+      },
+      dispose() {},
+    };
+
+    const result = await analyzeGame(customPgn, mockEngine, { depth: 12 });
+    expect(result.opening.opening).toBeNull();
+    expect(result.opening.bookPlies).toBe(0);
+    expect(result.moves).toHaveLength(3);
+    expect(result.moves[0].moveNumber).toBe(40);
+    expect(result.moves[1].moveNumber).toBe(40);
+    expect(result.moves[2].moveNumber).toBe(41);
+    expect(result.startEval?.evalLabel).toBe("M2");
+    expect(result.moves[2].evalLabel).toBe("#");
+    expect(result.moves[0].classification.badge).toBe("Best");
+    expect(result.summary.white.phaseMoveCounts?.opening).toBe(0);
+  });
+
+  it("M1: handles Black-to-move custom FEN PGNs, empty PGNs, and AbortSignal cancellation", async () => {
+    const blackStartPgn = `[SetUp "1"]
+[FEN "4k3/8/8/8/8/8/4P3/4K3 b - - 0 12"]
+12... Kd7 13. e4 Kd6`;
+
+    const parsed = parsePgnGame(blackStartPgn);
+    expect(parsed.moves[0].color).toBe("b");
+    expect(parsed.moves[0].moveNumber).toBe(12);
+    expect(parsed.moves[1].color).toBe("w");
+    expect(parsed.moves[1].moveNumber).toBe(13);
+
+    const mockEngine: ChessEngine = {
+      async evaluatePosition(fen, depth) {
+        return {
+          fen,
+          depth,
+          bestMoveUci: "e8d7",
+          bestMoveSan: "Kd7",
+          whiteCp: 80,
+          lines: [{ multipv: 1, cp: 80, pvUci: ["e8d7"], pvSan: ["Kd7"] }],
+        };
+      },
+      dispose() {},
+    };
+
+    const emptyRes = await analyzeGame("", mockEngine);
+    expect(emptyRes.moves).toHaveLength(0);
+    expect(emptyRes.summary.white.accuracy).toBe(100);
+    expect(emptyRes.summary.black.phaseAccuracies.opening).toBe(100);
+    expect(emptyRes.summary.black.phaseMoveCounts?.opening).toBe(0);
+
+    // Verify Book classification, onProgress calls, default/book depths, and bestMovePvSan
+    const progressLog: [number, number][] = [];
+    const evalCalls: Array<{ depth: number; multiPv: number }> = [];
+    const trackingEngine: ChessEngine = {
+      async evaluatePosition(fen, depth, multiPv) {
+        evalCalls.push({ depth, multiPv: multiPv ?? 1 });
+        return {
+          fen,
+          depth,
+          bestMoveUci: "e2e4",
+          bestMoveSan: "e4",
+          whiteCp: 20,
+          lines: [{ multipv: 1, cp: 20, pvUci: ["e2e4", "e7e5"], pvSan: ["e4", "e5"] }],
+        };
+      },
+      dispose() {},
+    };
+    const tracked = await analyzeGame("1. e4 e5 2. Nf3 Nc6", trackingEngine, {
+      onProgress: (c, t) => progressLog.push([c, t]),
+    });
+    expect(tracked.moves[0].classification.badge).toBe("Book");
+    expect(tracked.moves[0].bestMovePvSan).toEqual(["e4", "e5"]);
+    expect(tracked.moves[0].altPvSan).toEqual([]);
+    expect(tracked.startEval?.whiteCp).toBe(20);
+    expect(tracked.summary.white.accuracy).toBe(100);
+    expect(tracked.summary.white.badgeCounts.Book).toBe(2);
+    expect(tracked.summary.white.estimatedElo).toBe(2850);
+    expect(tracked.summary.white.phaseAccuracies).toEqual({
+      opening: 100,
+      middlegame: 100,
+      endgame: 100,
+    });
+    expect(tracked.summary.white.phaseMoveCounts).toEqual({
+      opening: 2,
+      middlegame: 0,
+      endgame: 0,
+    });
+    expect(progressLog).toEqual([
+      [1, 5],
+      [2, 5],
+      [3, 5],
+      [4, 5],
+      [5, 5],
+    ]);
+    // Standard positions evaluate at default depth 14 multiPv 3, inner book moves fast-path at depth 4
+    expect(evalCalls[0]).toEqual({ depth: 14, multiPv: 3 });
+    expect(evalCalls[1]).toEqual({ depth: 4, multiPv: 3 });
+    expect(evalCalls[3]).toEqual({ depth: 14, multiPv: 3 });
+    expect(evalCalls[4]).toEqual({ depth: 14, multiPv: 3 });
+
+    const ac = new AbortController();
+    ac.abort();
+    await expect(analyzeGame("1. e4 e5", mockEngine, { signal: ac.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
 });

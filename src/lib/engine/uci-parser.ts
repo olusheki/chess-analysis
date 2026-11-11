@@ -37,7 +37,8 @@ export function parseUciInfoLine(line: string): ParsedUciInfo | null {
   if (pv.length === 0) return null;
 
   if (scoreType === "mate") {
-    const cp = scoreVal >= 0 ? 10000 : -10000;
+    // In UCI, `mate 0` denotes the side to move is already checkmated (-10000)
+    const cp = scoreVal > 0 ? 10000 : -10000;
     return {
       depth,
       multipv,
@@ -113,9 +114,10 @@ export function uciPvToSan(fen: string, uciMoves: string[]): string[] {
 
 /**
  * Formats a White-perspective evaluation into a human-readable Chess.com eval label
- * (e.g., "+1.8", "-0.4", "0.0", "M3", "-M2").
+ * (e.g., "+1.8", "-0.4", "0.0", "M3", "-M2", "#").
  */
-export function formatEvalLabel(whiteCp: number, whiteMate?: number): string {
+export function formatEvalLabel(whiteCp: number, whiteMate?: number, isCheckmate?: boolean): string {
+  if (isCheckmate) return "#";
   if (whiteMate !== undefined && whiteMate !== 0) {
     return whiteMate > 0 ? `M${whiteMate}` : `-M${Math.abs(whiteMate)}`;
   }

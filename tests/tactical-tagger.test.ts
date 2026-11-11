@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Chess } from "chess.js";
-import { extractTacticalContext } from "@/lib/analysis/tactical-tagger";
+import { extractTacticalContext, determineGamePhase } from "@/lib/analysis/tactical-tagger";
 
 function playAndExtract(fenBefore: string, moveSan: string, moveNumber = 15) {
   const chess = new Chess(fenBefore);
@@ -117,5 +117,77 @@ describe("tactical-tagger (deterministic board feature detector)", () => {
     const endgameFen = "4k3/8/8/8/8/8/4R3/4K3 w - - 0 35";
     const endgameCtx = playAndExtract(endgameFen, "Re4", 35);
     expect(endgameCtx.gamePhase).toBe("Endgame");
+  });
+
+  it("H6.1: handles pinned defenders, pinned attackers, and overloaded 2-on-1 defenders accurately in HANGING_PIECE", () => {
+    // Rf4 attacked by g5 pawn, defended ONLY by pinned Bd2 (pinned to Ke1 by Qa5) -> MUST flag Rf4 hanging
+    const pinnedDefFen = "4k3/8/8/q5p1/5R2/8/3B3P/4K3 w - - 0 20";
+    const pinnedDefCtx = playAndExtract(pinnedDefFen, "h3", 20);
+    expect(pinnedDefCtx.tags).toContain("HANGING_PIECE");
+    expect(pinnedDefCtx.hangingPieceDetails?.square).toBe("f4");
+
+    // Nf5 pseudo-attacked by Black Nd6, which is absolutely pinned to Kd8 by White Rd1 -> NOT hanging
+    const pinnedAttFen = "3k4/8/3n4/5N2/8/8/8/4R1K1 w - - 0 25";
+    const pinnedAttCtx = playAndExtract(pinnedAttFen, "Rd1", 25);
+    expect(pinnedAttCtx.tags).not.toContain("HANGING_PIECE");
+
+    // Overloaded defender: Re4 attacked by Re8 and Ra4 (2 attackers), defended only by Re1 (1 defender) -> hanging
+    const overloadedFen = "4r1k1/8/8/8/r3R3/8/7P/4R1K1 w - - 0 30";
+    const overloadedCtx = playAndExtract(overloadedFen, "h3", 30);
+    expect(overloadedCtx.tags).toContain("HANGING_PIECE");
+    expect(overloadedCtx.hangingPieceDetails?.square).toBe("e4");
+  });
+
+  it("H6.2: detects TRAPPED_PIECE even when trapped piece has 3+ losing escape moves", () => {
+    // Black Rb5 attacked by Ba4 has 3 moves (Ra5, Rc5, Rxb4), all losing material cleanly
+    const trappedRookFen = "6k1/8/1pN5/1r1p4/1P1P4/P7/2B5/6K1 w - - 0 30";
+    const ctx = playAndExtract(trappedRookFen, "Ba4", 30);
+    expect(ctx.tags).toContain("TRAPPED_PIECE");
+  });
+
+  it("H6.3: does NOT tag CHECKMATE_THREAT on a quiet blunder when mate-in-1 already existed before the move", () => {
+    // White ALREADY had Re8# / Qb8# before playing quiet h3 -> should not celebrate CHECKMATE_THREAT
+    const fen = "6k1/5ppp/8/8/8/8/1Q5P/4R1K1 w - - 0 30";
+    const ctx = playAndExtract(fen, "h3", 30);
+    expect(ctx.tags).not.toContain("CHECKMATE_THREAT");
+  });
+
+  it("H6.4 & M2: refines RELATIVE_PIN, SKEWER, DEVELOPMENT, CENTER_CONTROL, TEMPO_GAIN, PAWN_BREAK, and Endgame phase", () => {
+    // Pawn f6 pinned to Bishop e7 is NOT RELATIVE_PIN (spec restricts to Queen or Rook)
+    const pawnBishopPinFen = "4k3/4b3/5p2/8/8/8/4B3/4K3 w - - 0 20";
+    const pinCtx = playAndExtract(pawnBishopPinFen, "Bh5+", 20);
+    expect(pinCtx.tags).not.toContain("RELATIVE_PIN");
+
+    // Undefended Re1 attacking Qe5 in front of Be8 can just be captured by Qxe1+ (NOT a sound skewer)
+    const fakeSkewerFen = "4b1k1/8/8/4q3/8/8/8/5RK1 w - - 0 30";
+    const fakeSkewerCtx = playAndExtract(fakeSkewerFen, "Re1", 30);
+    expect(fakeSkewerCtx.tags).not.toContain("SKEWER");
+
+    // Queen Qa1 attacking defended Rook Ra5 in front of Ba8 is NOT a skewer
+    const qSkewFen = "b3k3/8/1p6/r7/8/8/1Q6/6K1 w - - 0 30";
+    const qSkewCtx = playAndExtract(qSkewFen, "Qa1", 30);
+    expect(qSkewCtx.tags).not.toContain("SKEWER");
+
+    // Minor piece retreat Bf1 is NOT DEVELOPMENT; Nf3 targets e5/d4 so gets CENTER_CONTROL
+    const retreatCtx = playAndExtract(
+      "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3",
+      "Ng1",
+      3
+    );
+    expect(retreatCtx.tags).not.toContain("DEVELOPMENT");
+
+    const nf3Ctx = playAndExtract("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "Nf3", 1);
+    expect(nf3Ctx.tags).toContain("CENTER_CONTROL");
+    expect(nf3Ctx.tags).toContain("DEVELOPMENT");
+
+    // Endgame detected from material even at move 2
+    expect(determineGamePhase(new Chess("4k3/8/8/8/8/8/4R3/4K3 w - - 0 2"), 2)).toBe("Endgame");
+
+    // TEMPO_GAIN & PAWN_BREAK
+    const tempoCtx = playAndExtract("4k3/8/8/3q4/8/1P6/8/4KB2 w - - 0 15", "Bc4", 15);
+    expect(tempoCtx.tags).toContain("TEMPO_GAIN");
+
+    const breakCtx = playAndExtract("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2", "d4", 2);
+    expect(breakCtx.tags).toContain("PAWN_BREAK");
   });
 });

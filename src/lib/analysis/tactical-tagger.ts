@@ -5,6 +5,7 @@
  */
 
 import { Chess, Square, PieceSymbol, Color, Move } from "chess.js";
+import { staticExchangeOnSquare } from "./sacrifice-detector";
 
 export type TacticalTag =
   | "HANGING_PIECE"
@@ -164,8 +165,6 @@ function getLowestAttackerValue(board: BoardGrid, targetSq: Square, attackerColo
  * Determines current game phase based on remaining non-pawn piece material.
  */
 export function determineGamePhase(chess: Chess, moveNumber: number): "Opening" | "Middlegame" | "Endgame" {
-  if (moveNumber <= 10) return "Opening";
-
   let totalNonPawnMaterial = 0;
   const board = chess.board();
 
@@ -178,7 +177,27 @@ export function determineGamePhase(chess: Chess, moveNumber: number): "Opening" 
   }
 
   if (totalNonPawnMaterial <= 14) return "Endgame";
+  if (moveNumber <= 10) return "Opening";
   return "Middlegame";
+}
+
+function hasMateInOne(fen: string, attackerColor: Color): boolean {
+  try {
+    const fenParts = fen.split(" ");
+    fenParts[1] = attackerColor;
+    fenParts[3] = "-";
+    const probe = new Chess(fenParts.join(" "));
+    if (probe.isGameOver()) return false;
+    for (const reply of probe.moves({ verbose: true })) {
+      probe.move(reply);
+      const mates = probe.isCheckmate();
+      probe.undo();
+      if (mates) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /**
@@ -211,6 +230,7 @@ export function extractTacticalContext(
   const activeColor = chessBefore.turn(); // The player who just moved
   const opponentColor: Color = activeColor === "w" ? "b" : "w";
   const gamePhase = determineGamePhase(chessBefore, moveNumber);
+  const hadMateInOneBefore = !chessBefore.inCheck() && hasMateInOne(fenBefore, activeColor);
 
   // Resolve exact move object from chessBefore so disambiguation/promotions/captures are exact
   let movedObj: Move | null = null;
@@ -229,52 +249,57 @@ export function extractTacticalContext(
     addTag("KING_SAFETY_CASTLE");
   }
 
-  // 1. Piece Development Tag (Opening phase minor pieces moving off back rank)
-  if (gamePhase === "Opening") {
-    const movedPieceType = movedObj?.piece;
-    const isMinor =
-      movedPieceType === "n" ||
-      movedPieceType === "b" ||
-      moveSan.startsWith("N") ||
-      moveSan.startsWith("B");
-    if (isMinor) {
+  const boardAfter = chessAfter.board();
+
+  // 1. Piece Development Tag (Opening phase minor pieces moving forward off their back rank)
+  if (gamePhase === "Opening" && movedObj) {
+    const isMinor = movedObj.piece === "n" || movedObj.piece === "b";
+    const backRank = activeColor === "w" ? "1" : "8";
+    if (isMinor && movedObj.from[1] === backRank && movedObj.to[1] !== backRank) {
       addTag("DEVELOPMENT");
     }
   }
 
-  // 2. Center Control Tag (e4, d4, e5, d5 occupied or directly targeted)
+  // 2. Center Control Tag (e4, d4, e5, d5 occupied or targeted by piece/pawn)
   const centerSquares: Square[] = ["e4", "d4", "e5", "d5"];
   const destSquare = movedObj?.to;
   if (destSquare && centerSquares.includes(destSquare)) {
     addTag("CENTER_CONTROL");
-  } else if (centerSquares.some((sq) => moveSan.includes(sq))) {
-    addTag("CENTER_CONTROL");
+  } else if (destSquare && movedObj && gamePhase !== "Endgame") {
+    const movedPieceAfter = chessAfter.get(destSquare);
+    if (
+      movedPieceAfter &&
+      (movedPieceAfter.type === "p" || movedPieceAfter.type === "n" || movedPieceAfter.type === "b")
+    ) {
+      const attackedCenter = getPieceAttackedSquares(
+        boardAfter,
+        destSquare,
+        activeColor,
+        movedPieceAfter.type
+      );
+      if (attackedCenter.some((sq) => centerSquares.includes(sq))) {
+        addTag("CENTER_CONTROL");
+      }
+    }
   }
 
-  const boardAfter = chessAfter.board();
-
-  // 3. Hanging Piece Detection (prioritizing highest-value hanging piece)
-  // Detects undefended attacked pieces OR high-value pieces attacked by strictly lower-value opponent pieces.
+  // 3. Hanging Piece Detection using true SEE (handles pinned attackers/defenders & overloaded defenders)
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
       const piece = boardAfter[r][c];
       if (!piece || piece.color !== activeColor || piece.type === "k") continue;
       const sq = toSquare(r, c);
 
-      const lowestAttacker = getLowestAttackerValue(boardAfter, sq, opponentColor);
-      if (lowestAttacker === null) continue;
+      const seeLoss = staticExchangeOnSquare(chessAfter, sq, opponentColor);
+      if (seeLoss <= 0) continue;
 
-      const isDefended = chessAfter.isAttacked(sq, activeColor);
       const pieceValue = PIECE_VALUES[piece.type];
-
-      if (!isDefended || lowestAttacker < pieceValue) {
-        if (!hangingPieceDetails || pieceValue > hangingPieceDetails.value) {
-          hangingPieceDetails = {
-            square: sq,
-            piece: PIECE_NAMES[piece.type],
-            value: pieceValue,
-          };
-        }
+      if (!hangingPieceDetails || pieceValue > hangingPieceDetails.value) {
+        hangingPieceDetails = {
+          square: sq,
+          piece: PIECE_NAMES[piece.type],
+          value: pieceValue,
+        };
       }
     }
   }
@@ -379,25 +404,41 @@ export function extractTacticalContext(
                 piece: PIECE_NAMES[firstEnemy.type],
                 pinnedTo: "King",
               };
-            } else if (
-              firstEnemy.type === "k" ||
-              (PIECE_VALUES[firstEnemy.type] > PIECE_VALUES[secondEnemy.type] &&
-                PIECE_VALUES[secondEnemy.type] >= 3)
-            ) {
-              addTag("SKEWER");
-              skeweredPieceDetails ??= {
-                frontSquare: firstEnemy.sq,
-                frontPiece: PIECE_NAMES[firstEnemy.type],
-                backSquare: secondEnemy.sq,
-                backPiece: PIECE_NAMES[secondEnemy.type],
-              };
-            } else if (PIECE_VALUES[secondEnemy.type] > PIECE_VALUES[firstEnemy.type]) {
-              addTag("RELATIVE_PIN");
-              pinnedPieceDetails ??= {
-                square: firstEnemy.sq,
-                piece: PIECE_NAMES[firstEnemy.type],
-                pinnedTo: PIECE_NAMES[secondEnemy.type],
-              };
+            } else {
+              const frontAttacksAttacker = getPieceAttackedSquares(
+                boardAfter,
+                firstEnemy.sq,
+                opponentColor,
+                firstEnemy.type
+              ).includes(movedObj.to);
+              const attackerDefended = chessAfter.isAttacked(movedObj.to, activeColor);
+              const frontDefended = chessAfter.isAttacked(firstEnemy.sq, opponentColor);
+
+              if (
+                firstEnemy.type === "k" ||
+                (PIECE_VALUES[firstEnemy.type] > PIECE_VALUES[secondEnemy.type] &&
+                  PIECE_VALUES[secondEnemy.type] >= 3 &&
+                  (!frontAttacksAttacker || attackerDefended) &&
+                  (PIECE_VALUES[movedPieceAfter.type] < PIECE_VALUES[firstEnemy.type] || !frontDefended))
+              ) {
+                addTag("SKEWER");
+                skeweredPieceDetails ??= {
+                  frontSquare: firstEnemy.sq,
+                  frontPiece: PIECE_NAMES[firstEnemy.type],
+                  backSquare: secondEnemy.sq,
+                  backPiece: PIECE_NAMES[secondEnemy.type],
+                };
+              } else if (
+                (secondEnemy.type === "q" || secondEnemy.type === "r") &&
+                PIECE_VALUES[secondEnemy.type] > PIECE_VALUES[firstEnemy.type]
+              ) {
+                addTag("RELATIVE_PIN");
+                pinnedPieceDetails ??= {
+                  square: firstEnemy.sq,
+                  piece: PIECE_NAMES[firstEnemy.type],
+                  pinnedTo: PIECE_NAMES[secondEnemy.type],
+                };
+              }
             }
           }
         }
@@ -455,25 +496,10 @@ export function extractTacticalContext(
     }
   }
 
-  // 9. Checkmate Threat Detection: if opponent isn't in check, does activeColor threaten mate in 1?
-  if (!isCheck && !chessAfter.isGameOver()) {
-    try {
-      const fenParts = chessAfter.fen().split(" ");
-      fenParts[1] = activeColor;
-      fenParts[3] = "-"; // Clear en-passant for probe
-      const probe = new Chess(fenParts.join(" "));
-      const legalReplies = probe.moves({ verbose: true });
-      for (const reply of legalReplies) {
-        probe.move(reply);
-        const mates = probe.isCheckmate();
-        probe.undo();
-        if (mates) {
-          addTag("CHECKMATE_THREAT");
-          break;
-        }
-      }
-    } catch {
-      // Ignore invalid synthetic probe positions
+  // 9. Checkmate Threat Detection: if opponent isn't in check and activeColor didn't already miss mate-in-1
+  if (!isCheck && !hadMateInOneBefore && !chessAfter.isGameOver()) {
+    if (hasMateInOne(fenAfter, activeColor)) {
+      addTag("CHECKMATE_THREAT");
     }
   }
 
@@ -492,12 +518,11 @@ export function extractTacticalContext(
           const hasSafeEscape = pieceMoves.some((m) => {
             const tmp = new Chess(chessAfter.fen());
             tmp.move(m);
-            const destAttacker = getLowestAttackerValue(tmp.board(), m.to, activeColor);
-            if (destAttacker === null) return true;
-            if (m.captured && PIECE_VALUES[m.captured] >= PIECE_VALUES[ep.type]) return true;
-            return destAttacker >= PIECE_VALUES[ep.type] && tmp.isAttacked(m.to, opponentColor);
+            const seeDest = staticExchangeOnSquare(tmp, m.to, activeColor);
+            const capVal = m.captured ? PIECE_VALUES[m.captured] : 0;
+            return seeDest === 0 || capVal >= seeDest;
           });
-          if (!hasSafeEscape && pieceMoves.length <= 2) {
+          if (!hasSafeEscape) {
             addTag("TRAPPED_PIECE");
             break;
           }

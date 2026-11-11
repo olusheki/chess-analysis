@@ -143,4 +143,81 @@ describe("ChessComApiService (module 0 username importer)", () => {
     expect(games[0].userColor).toBe("white");
     expect(games[0].result).toBe("win");
   });
+
+  it("H7: returns [] for 404 archives and throws ChessComApiError on upstream 429/500 responses", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+    }) as unknown as typeof fetch;
+    await expect(ChessComApiService.getRecentGames("missing_user")).resolves.toEqual([]);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      statusText: "Too Many Requests",
+    }) as unknown as typeof fetch;
+    await expect(ChessComApiService.getPlayerProfile("rate_limited")).rejects.toThrow();
+    await expect(ChessComApiService.getRecentGames("rate_limited")).rejects.toThrow();
+  });
+
+  it("validates blank usernames, trims whitespace, skips non-standard variants, and handles empty archive lists", async () => {
+    await expect(ChessComApiService.getPlayerProfile("   ")).resolves.toBeNull();
+    await expect(ChessComApiService.getRecentGames("   ")).rejects.toThrow(/Username is required/i);
+
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith("/games/archives")) {
+        return { ok: true, json: async () => ({ archives: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ username: "TrimUser", status: "basic", followers: 1 }) } as Response;
+    }) as unknown as typeof fetch;
+
+    const profile = await ChessComApiService.getPlayerProfile("  TrimUser  ");
+    expect(profile?.username).toBe("TrimUser");
+    await expect(ChessComApiService.getRecentGames("trimuser")).resolves.toEqual([]);
+
+    // Non-standard rules (chess960) and missing pgn are filtered out
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith("/games/archives")) {
+        return {
+          ok: true,
+          json: async () => ({ archives: ["https://api.chess.com/pub/player/u/games/2026/11"] }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          games: [
+            {
+              url: "1",
+              pgn: "",
+              time_control: "180",
+              end_time: 100,
+              rated: true,
+              time_class: "blitz",
+              rules: "chess",
+              white: { username: "u", rating: 1000, result: "win" },
+              black: { username: "b", rating: 1000, result: "resigned" },
+            },
+            {
+              url: "2",
+              pgn: "1. e4 e5",
+              time_control: "180",
+              end_time: 200,
+              rated: true,
+              time_class: "blitz",
+              rules: "chess960",
+              white: { username: "u", rating: 1000, result: "win" },
+              black: { username: "b", rating: 1000, result: "resigned" },
+            },
+          ],
+        }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const filtered = await ChessComApiService.getRecentGames("u", 10);
+    expect(filtered).toEqual([]);
+  });
 });

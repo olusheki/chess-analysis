@@ -55,11 +55,21 @@ export interface PlayerSummary {
     middlegame: number;
     endgame: number;
   };
+  phaseMoveCounts?: {
+    opening: number;
+    middlegame: number;
+    endgame: number;
+  };
 }
 
 export interface GameAnalysis {
   headers: Record<string, string>;
   startFen: string;
+  startEval?: {
+    whiteCp: number;
+    whiteMate?: number;
+    evalLabel: string;
+  };
   opening: GameOpeningAnalysis;
   moves: AnalyzedMove[];
   summary: {
@@ -111,6 +121,10 @@ export function parsePgnGame(pgn: string): ParsedPgnGame {
     ? headers.FEN
     : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
+  const fenParts = startFen.trim().split(/\s+/);
+  const startFullMove = parseInt(fenParts[5] ?? "1", 10) || 1;
+  const startTurn: "w" | "b" = fenParts[1] === "b" ? "b" : "w";
+
   const replay = new Chess(startFen);
   const moves: ParsedMove[] = [];
 
@@ -121,10 +135,14 @@ export function parsePgnGame(pgn: string): ParsedPgnGame {
     if (!played) break;
     const fenAfter = replay.fen();
     const uci = `${played.from}${played.to}${played.promotion ?? ""}`;
+    const moveNumber =
+      startTurn === "w"
+        ? startFullMove + Math.floor(i / 2)
+        : startFullMove + Math.floor((i + 1) / 2);
 
     moves.push({
       ply: i + 1,
-      moveNumber: Math.floor(i / 2) + 1,
+      moveNumber,
       color: played.color,
       san: played.san,
       uci,
@@ -158,7 +176,7 @@ export async function analyzeGame(
     return {
       headers,
       startFen,
-      opening: classifyGameOpenings([]),
+      opening: classifyGameOpenings([], 30, startFen),
       moves: [],
       summary: {
         white: {
@@ -166,18 +184,24 @@ export async function analyzeGame(
           estimatedElo: 1500,
           badgeCounts: emptyBadgeCounts(),
           phaseAccuracies: { opening: 100, middlegame: 100, endgame: 100 },
+          phaseMoveCounts: { opening: 0, middlegame: 0, endgame: 0 },
         },
         black: {
           accuracy: 100,
           estimatedElo: 1500,
           badgeCounts: emptyBadgeCounts(),
           phaseAccuracies: { opening: 100, middlegame: 100, endgame: 100 },
+          phaseMoveCounts: { opening: 0, middlegame: 0, endgame: 0 },
         },
       },
     };
   }
 
-  const opening = classifyGameOpenings(moves.map((m) => m.san));
+  const opening = classifyGameOpenings(
+    moves.map((m) => m.san),
+    30,
+    startFen
+  );
 
   // Positions to evaluate: startFen + every fenAfter (N + 1 positions, reusing evals across plies!)
   const positionFens = [startFen, ...moves.map((m) => m.fenAfter)];
@@ -265,7 +289,7 @@ export async function analyzeGame(
       ...move,
       whiteCp: evalAfter.whiteCp,
       whiteMate: evalAfter.whiteMate,
-      evalLabel: formatEvalLabel(evalAfter.whiteCp, evalAfter.whiteMate),
+      evalLabel: formatEvalLabel(evalAfter.whiteCp, evalAfter.whiteMate, evalAfter.isCheckmate),
       bestMoveUci: evalBefore.bestMoveUci,
       bestMoveSan: evalBefore.bestMoveSan,
       bestMovePvSan: bestLine?.pvSan ?? [],
@@ -306,19 +330,26 @@ export async function analyzeGame(
       badgeCounts.Mistake
     );
 
-    const phaseAcc = (phase: "Opening" | "Middlegame" | "Endgame") => {
-      const subset = playerMoves.filter((m) => m.tacticalContext.gamePhase === phase);
-      return subset.length > 0 ? calculateOverallGameAccuracy(toAccuracyItems(subset)) : 100.0;
-    };
+    const openingMoves = playerMoves.filter((m) => m.tacticalContext.gamePhase === "Opening");
+    const middleMoves = playerMoves.filter((m) => m.tacticalContext.gamePhase === "Middlegame");
+    const endgameMoves = playerMoves.filter((m) => m.tacticalContext.gamePhase === "Endgame");
+
+    const phaseAcc = (subset: AnalyzedMove[]) =>
+      subset.length > 0 ? calculateOverallGameAccuracy(toAccuracyItems(subset)) : 100.0;
 
     return {
       accuracy,
       estimatedElo,
       badgeCounts,
       phaseAccuracies: {
-        opening: phaseAcc("Opening"),
-        middlegame: phaseAcc("Middlegame"),
-        endgame: phaseAcc("Endgame"),
+        opening: phaseAcc(openingMoves),
+        middlegame: phaseAcc(middleMoves),
+        endgame: phaseAcc(endgameMoves),
+      },
+      phaseMoveCounts: {
+        opening: openingMoves.length,
+        middlegame: middleMoves.length,
+        endgame: endgameMoves.length,
       },
     };
   };
@@ -326,6 +357,13 @@ export async function analyzeGame(
   return {
     headers,
     startFen,
+    startEval: evals[0]
+      ? {
+          whiteCp: evals[0].whiteCp,
+          whiteMate: evals[0].whiteMate,
+          evalLabel: formatEvalLabel(evals[0].whiteCp, evals[0].whiteMate, evals[0].isCheckmate),
+        }
+      : undefined,
     opening,
     moves: analyzedMoves,
     summary: {
