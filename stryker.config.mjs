@@ -18,6 +18,7 @@ const config = {
     "src/lib/analysis/opening-book.ts",
     "src/lib/analysis/sacrifice-detector.ts",
     "src/lib/analysis/game-analyzer.ts",
+    "src/lib/play/play-session.ts",
     "src/lib/ai/gemini-coach.ts",
     "src/lib/ai/offline-coach.ts",
     "src/lib/chess/plain-notation.ts",

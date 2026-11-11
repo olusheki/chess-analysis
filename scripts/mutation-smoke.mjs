@@ -302,6 +302,27 @@ const MUTANTS = [
     replacement: "true);",
     testFile: "tests/game-analyzer.test.ts",
   },
+  {
+    name: "M41: Ignore UCI_LimitStrength and always disable strength limit in engine-evaluator.ts",
+    file: "src/lib/engine/engine-evaluator.ts",
+    target: "if (cfg.useLimitStrength) {",
+    replacement: "if (false && cfg.useLimitStrength) {",
+    testFile: "tests/uci-strength.test.ts",
+  },
+  {
+    name: "M42: Keep stale FEN on Play Mode undo instead of restoring snapshot in useReviewStore.ts",
+    file: "src/lib/store/useReviewStore.ts",
+    target: "fen: snapshot.fen,",
+    replacement: "fen: pm.fen,",
+    testFile: "tests/use-review-store.test.ts",
+  },
+  {
+    name: "M43: Invert checkmate winner check in getPlayGameOverStatus in play-session.ts",
+    file: "src/lib/play/play-session.ts",
+    target: "const userWon = chess.turn() !== userColor;",
+    replacement: "const userWon = chess.turn() === userColor;",
+    testFile: "tests/play-session.test.ts",
+  },
 ];
 
 let killed = 0;

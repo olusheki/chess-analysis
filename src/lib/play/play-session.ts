@@ -355,15 +355,6 @@ export function getPlayGameOverStatus(
     };
   }
 
-  if (chess.isThreefoldRepetition()) {
-    return {
-      reason: "threefold_repetition",
-      winner: "draw",
-      title: "Draw by Repetition",
-      subtitle: "The same position occurred three times.",
-    };
-  }
-
   return {
     reason: "draw",
     winner: "draw",

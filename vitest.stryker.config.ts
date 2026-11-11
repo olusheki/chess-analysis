@@ -11,6 +11,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "node",
+    testTimeout: 15000,
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
     exclude: ["tests/stockfish-acceptance.test.ts"],
     setupFiles: ["./tests/setup.ts"],
