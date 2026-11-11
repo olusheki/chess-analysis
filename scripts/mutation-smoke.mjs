@@ -41,8 +41,8 @@ const MUTANTS = [
   {
     name: "M4: Break Brilliant sacrifice material threshold in move-classifier.ts",
     file: "src/lib/analysis/move-classifier.ts",
-    target: "if (materialSacrificed >= 2 && (isBestMove || deltaWP <= 1.0) && wpPlayed >= 38.0)",
-    replacement: "if (materialSacrificed >= 10 && (isBestMove || deltaWP <= 1.0) && wpPlayed >= 38.0)",
+    target: "if (materialSacrificed >= 2 && isNearBestForSac && wpPlayed >= 38.0)",
+    replacement: "if (materialSacrificed >= 10 && isNearBestForSac && wpPlayed >= 38.0)",
     testFile: "tests/move-classifier.test.ts",
   },
   {
@@ -101,6 +101,48 @@ const MUTANTS = [
     target: "if (whiteMate !== undefined && whiteMate !== 0) {\n    return whiteMate > 0 ? 100 : 0;\n  }",
     replacement: "if (whiteMate !== undefined && whiteMate !== 0) {\n    return 50;\n  }",
     testFile: "tests/ui-components.test.tsx",
+  },
+  {
+    name: "M13: Bypass Brilliant cpDrop <= 35 && !lostMate precision guard in move-classifier.ts",
+    file: "src/lib/analysis/move-classifier.ts",
+    target: "const isNearBestForSac = isBestMove || (deltaWP <= 1.0 && cpDrop <= 35 && !lostMate);",
+    replacement: "const isNearBestForSac = isBestMove || deltaWP <= 1.0;",
+    testFile: "tests/move-classifier.test.ts",
+  },
+  {
+    name: "M14: Remove preSeeLoss subtraction for pre-existing hanging pieces in sacrifice-detector.ts",
+    file: "src/lib/analysis/sacrifice-detector.ts",
+    target: "const preSeeLoss = preTurnFlipped\n        ? staticExchangeOnSquare(preTurnFlipped, sq, opponentColor)\n        : 0;",
+    replacement: "const preSeeLoss = 0;",
+    testFile: "tests/sacrifice-detector.test.ts",
+  },
+  {
+    name: "M15: Skip rejecting pending searches in dispose() in stockfish-worker.ts",
+    file: "src/lib/engine/stockfish-worker.ts",
+    target: "rejectAllPending(makeAbortError(\"Stockfish worker disposed\"));",
+    replacement: "// broken: leak pending promises without rejecting",
+    testFile: "tests/stockfish-worker.test.ts",
+  },
+  {
+    name: "M16: Ignore custom FEN full-move counter in game-analyzer.ts",
+    file: "src/lib/analysis/game-analyzer.ts",
+    target: "const startFullMove = parseInt(fenParts[5] ?? \"1\", 10) || 1;",
+    replacement: "const startFullMove = 1;",
+    testFile: "tests/game-analyzer.test.ts",
+  },
+  {
+    name: "M17: Break Recharts v3 string activeTooltipIndex parsing in EvalGraph.tsx",
+    file: "src/components/chess/EvalGraph.tsx",
+    target: "typeof rawIdx === \"string\" && rawIdx.trim() !== \"\"\n                  ? Number(rawIdx)\n                  : NaN;",
+    replacement: "NaN;",
+    testFile: "tests/eval-graph.test.tsx",
+  },
+  {
+    name: "M18: Swallow upstream HTTP 429 rate-limit status as 502 in api/chesscom/route.ts",
+    file: "src/app/api/chesscom/route.ts",
+    target: "const status =\n      error instanceof ChessComApiError && error.status === 429 ? 429 : 502;",
+    replacement: "const status = 502;",
+    testFile: "tests/api-routes.test.ts",
   },
 ];
 

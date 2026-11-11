@@ -4,19 +4,21 @@ const config = {
   reporters: ["html", "clear-text", "progress"],
   testRunner: "vitest",
   vitest: {
-    configFile: "vitest.config.ts",
+    configFile: "vitest.stryker.config.ts",
   },
   coverageAnalysis: "perTest",
   mutate: [
     "src/lib/engine/win-probability.ts",
     "src/lib/engine/uci-parser.ts",
+    "src/lib/engine/engine-evaluator.ts",
+    "src/lib/engine/stockfish-worker.ts",
     "src/lib/analysis/move-classifier.ts",
     "src/lib/analysis/tactical-tagger.ts",
     "src/lib/analysis/opening-book.ts",
     "src/lib/analysis/sacrifice-detector.ts",
     "src/lib/analysis/game-analyzer.ts",
     "src/lib/ai/gemini-coach.ts",
-    "src/lib/ai/coach-personas.ts",
+    "src/lib/api/chesscom-api.ts",
     "src/lib/store/useReviewStore.ts",
   ],
   thresholds: {
@@ -25,7 +27,7 @@ const config = {
     break: 65,
   },
   concurrency: 4,
-  timeoutMS: 15000,
+  timeoutMS: 30000,
 };
 
 export default config;
