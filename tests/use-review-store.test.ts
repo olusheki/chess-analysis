@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useReviewStore } from "@/lib/store/useReviewStore";
+import { getActiveMove, useReviewStore } from "@/lib/store/useReviewStore";
 import type { GameAnalysis } from "@/lib/analysis/game-analyzer";
 
 function buildFixtureAnalysis(): GameAnalysis {
@@ -195,5 +195,136 @@ describe("useReviewStore (Zustand reactive review state)", () => {
     const right = useReviewStore.getState().submitRetryMove("b8", "c6");
     expect(right.solved).toBe(true);
     expect(useReviewStore.getState().retryState.status).toBe("solved");
+
+    // H3.2: Further clicks after solved MUST NOT overwrite solved status back to incorrect
+    const postSolve = useReviewStore.getState().submitRetryMove("d7", "d6");
+    expect(postSolve.solved).toBe(true);
+    expect(useReviewStore.getState().retryState.status).toBe("solved");
+  });
+
+  it("H3.3 & M4: supports underpromotion in Retry Mode and clears stale analysis on error", () => {
+    const promoAnalysis = buildFixtureAnalysis();
+    promoAnalysis.moves = [
+      {
+        ...promoAnalysis.moves[0],
+        ply: 1,
+        san: "e8=Q+",
+        uci: "e7e8q",
+        from: "e7",
+        to: "e8",
+        fenBefore: "k7/4P3/8/8/8/8/8/4K3 w - - 0 40",
+        fenAfter: "k3Q3/8/8/8/8/8/8/4K3 b - - 0 40",
+        bestMoveUci: "e7e8n",
+        bestMoveSan: "e8=N",
+        bestMovePvSan: ["e8=N"],
+      },
+    ];
+    useReviewStore.getState().setAnalysis(promoAnalysis);
+    useReviewStore.getState().jumpToPly(1);
+    useReviewStore.getState().startRetryMode();
+
+    const wrongPromo = useReviewStore.getState().submitRetryMove("e7", "e8", "q");
+    expect(wrongPromo.solved).toBe(false);
+
+    const knightPromo = useReviewStore.getState().submitRetryMove("e7", "e8", "n");
+    expect(knightPromo.solved).toBe(true);
+    expect(knightPromo.san).toBe("e8=N");
+
+    // M4: setAnalysisError clears previous analysis so stale game does not remain behind error banner
+    useReviewStore.getState().setAnalysisError("Invalid PGN");
+    expect(useReviewStore.getState().analysis).toBeNull();
+    expect(useReviewStore.getState().analysisError).toBe("Invalid PGN");
+  });
+
+  it("handles store setters, navigation boundary clamping, key moment wraparound, and reset", () => {
+    const initial = useReviewStore.getState();
+    expect(initial.pgnInput).toBe("");
+    expect(initial.analysisStatus).toBe("idle");
+    expect(initial.analysisProgress).toEqual({ completed: 0, total: 0 });
+    expect(initial.boardFlipped).toBe(false);
+    expect(initial.showBestMove).toBe(false);
+    expect(initial.bestMovePreviewIndex).toBe(0);
+    expect(initial.personaId).toBe("danny");
+    expect(initial.retryState.attempts).toBe(0);
+
+    const fixture = buildFixtureAnalysis();
+    expect(getActiveMove(null, 1)).toBeNull();
+    expect(getActiveMove(fixture, 0)).toBeNull();
+    expect(getActiveMove(fixture, 4)?.san).toBe("Ke7");
+
+    const store = useReviewStore.getState();
+    store.setPgnInput("1. d4 d5");
+    expect(useReviewStore.getState().pgnInput).toBe("1. d4 d5");
+
+    store.setAnalyzing(2, 10);
+    expect(useReviewStore.getState().analysisStatus).toBe("analyzing");
+    expect(useReviewStore.getState().analysisProgress).toEqual({ completed: 2, total: 10 });
+    expect(useReviewStore.getState().analysisError).toBeNull();
+
+    store.setAnalysis(fixture);
+    store.setExplanation(4, {
+      badge: "Blunder",
+      shortComment: "Blunder!",
+      detailedExplanation: "Dropped the pawn structure.",
+    });
+    store.setStoryline({
+      headline: "White wins cleanly",
+      summary: "Strong tactical game.",
+      whiteTakeaway: "Sharp pressure.",
+      blackTakeaway: "Watch king safety.",
+    });
+    expect(useReviewStore.getState().explanations[4]?.shortComment).toBe("Blunder!");
+    expect(useReviewStore.getState().storyline?.headline).toBe("White wins cleanly");
+
+    // Switching persona clears cached move explanations & storyline
+    store.setPersonaId("sage");
+    expect(useReviewStore.getState().personaId).toBe("sage");
+    expect(useReviewStore.getState().explanations).toEqual({});
+    expect(useReviewStore.getState().storyline).toBeNull();
+
+    // Navigation bounds
+    store.jumpToPly(-5);
+    expect(useReviewStore.getState().currentPly).toBe(0);
+    store.prevMove();
+    expect(useReviewStore.getState().currentPly).toBe(0);
+    store.jumpToPly(999);
+    expect(useReviewStore.getState().currentPly).toBe(fixture.moves.length);
+    store.nextMove();
+    expect(useReviewStore.getState().currentPly).toBe(fixture.moves.length);
+
+    // Key moment wraps back to first key moment when already at last key moment
+    useReviewStore.getState().nextKeyMoment();
+    expect(useReviewStore.getState().currentPly).toBe(4);
+
+    // Retry mode ignored at ply 0 (no active move), exited cleanly otherwise
+    store.jumpToPly(0);
+    store.startRetryMode();
+    expect(useReviewStore.getState().retryState.active).toBe(false);
+    store.jumpToPly(4);
+    store.startRetryMode();
+    expect(useReviewStore.getState().retryState.active).toBe(true);
+    store.exitRetryMode();
+    expect(useReviewStore.getState().retryState.active).toBe(false);
+    expect(useReviewStore.getState().retryState.status).toBe("idle");
+
+    // Step best move bounds
+    store.stepBestMoveLine(100);
+    expect(useReviewStore.getState().bestMovePreviewIndex).toBe(3);
+    store.stepBestMoveLine(-100);
+    expect(useReviewStore.getState().bestMovePreviewIndex).toBe(0);
+
+    // Reset clears everything cleanly
+    store.flipBoard();
+    store.reset();
+    expect(useReviewStore.getState().analysis).toBeNull();
+    expect(useReviewStore.getState().pgnInput).toBe("");
+    expect(useReviewStore.getState().analysisStatus).toBe("idle");
+    expect(useReviewStore.getState().analysisProgress).toEqual({ completed: 0, total: 0 });
+    expect(useReviewStore.getState().boardFlipped).toBe(false);
+    expect(useReviewStore.getState().showBestMove).toBe(false);
+    expect(useReviewStore.getState().bestMovePreviewIndex).toBe(0);
+    expect(useReviewStore.getState().currentPly).toBe(0);
+    expect(useReviewStore.getState().explanations).toEqual({});
+    expect(useReviewStore.getState().storyline).toBeNull();
   });
 });

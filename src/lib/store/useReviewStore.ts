@@ -102,6 +102,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
 
   setAnalysisError: (message) =>
     set({
+      analysis: null,
       analysisStatus: "error",
       analysisError: message,
     }),
@@ -187,7 +188,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   stepBestMoveLine: (delta) =>
     set((state) => {
       const move = getActiveMove(state.analysis, state.currentPly);
-      const maxSteps = move ? move.bestMovePvSan.length : 0;
+      const maxSteps = move ? Math.min(6, move.bestMovePvSan.length) : 0;
       const nextIdx = Math.max(0, Math.min(maxSteps, state.bestMovePreviewIndex + delta));
       return { bestMovePreviewIndex: nextIdx, showBestMove: true };
     }),
@@ -220,17 +221,24 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
     if (!retryState.active || !retryState.fen || !retryState.targetUci) {
       return { solved: false };
     }
+    if (retryState.status === "solved") {
+      return { solved: true };
+    }
 
     const chess = new Chess(retryState.fen);
-    let played;
+    let played = null;
     try {
-      played = chess.move({ from, to, promotion: promotion ?? "q" });
+      played = promotion
+        ? chess.move({ from, to, promotion })
+        : chess.move({ from, to, promotion: "q" });
     } catch {
-      // Retry without promotion if non-promotion move
-      try {
-        played = chess.move({ from, to });
-      } catch {
-        played = null;
+      if (!promotion) {
+        // Retry without promotion if non-promotion move
+        try {
+          played = chess.move({ from, to });
+        } catch {
+          played = null;
+        }
       }
     }
 

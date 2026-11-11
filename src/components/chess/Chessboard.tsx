@@ -21,13 +21,22 @@ interface ChessboardProps {
   flipped?: boolean;
   interactive?: boolean;
   theme?: BoardThemeId;
-  onMove?: (from: string, to: string) => void;
+  onMove?: (from: string, to: string, promotion?: string) => void;
 }
 
 const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const RANKS = ["8", "7", "6", "5", "4", "3", "2", "1"];
 
-export function Chessboard({
+export function Chessboard(props: ChessboardProps) {
+  return (
+    <ChessboardSurface
+      key={`${props.fen}:${Boolean(props.interactive)}`}
+      {...props}
+    />
+  );
+}
+
+function ChessboardSurface({
   fen,
   lastMove = null,
   badge = null,
@@ -38,6 +47,7 @@ export function Chessboard({
   onMove,
 }: ChessboardProps) {
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
+  const [pendingPromo, setPendingPromo] = useState<{ from: Square; to: Square } | null>(null);
 
   const chess = useMemo(() => {
     try {
@@ -67,21 +77,22 @@ export function Chessboard({
 
     if (selectedSquare && legalTargets.has(sq)) {
       const from = selectedSquare;
+      const movingPiece = chess.get(from);
       setSelectedSquare(null);
+      if (movingPiece?.type === "p" && (sq[1] === "8" || sq[1] === "1")) {
+        setPendingPromo({ from, to: sq });
+        return;
+      }
       onMove(from, sq);
       return;
     }
 
     const piece = chess.get(sq);
     if (piece && piece.color === chess.turn()) {
+      setPendingPromo(null);
       setSelectedSquare(sq);
     } else if (selectedSquare) {
-      // Allow clicking destination directly in case caller validates or resets
-      const from = selectedSquare;
       setSelectedSquare(null);
-      if (legalTargets.has(sq)) {
-        onMove(from, sq);
-      }
     }
   };
 
@@ -181,6 +192,36 @@ export function Chessboard({
 
       {/* SVG Tactical & Best Move Arrows */}
       <BoardOverlays arrows={arrows} flipped={flipped} />
+
+      {/* Promotion Picker Overlay in Interactive Mode */}
+      {pendingPromo && onMove && (
+        <div
+          data-testid="promotion-picker"
+          className="absolute inset-0 z-30 flex items-center justify-center bg-black/50"
+          onClick={() => setPendingPromo(null)}
+        >
+          <div
+            className="flex items-center gap-2 rounded-lg border border-[#3d3b38] bg-[#262522] p-2.5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(["q", "r", "b", "n"] as const).map((promo) => (
+              <button
+                key={promo}
+                type="button"
+                aria-label={`Promote to ${promo}`}
+                onClick={() => {
+                  const { from, to } = pendingPromo;
+                  setPendingPromo(null);
+                  onMove(from, to, promo);
+                }}
+                className="h-12 w-12 rounded border border-[#3d3b38] bg-[#312e2b] p-1.5 transition hover:border-[#96bc4b] hover:bg-[#3d3a36]"
+              >
+                <ChessPieceSvg color={chess.turn()} type={promo} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

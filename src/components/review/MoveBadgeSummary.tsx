@@ -21,6 +21,7 @@ const DISPLAY_ORDER: MoveBadge[] = [
   "Mistake",
   "Miss",
   "Blunder",
+  "Forced",
 ];
 
 export function MoveBadgeSummary({ summary }: MoveBadgeSummaryProps) {
@@ -68,15 +69,27 @@ export function MoveBadgeSummary({ summary }: MoveBadgeSummaryProps) {
           Phase Accuracy
         </div>
         <div className="grid grid-cols-3 gap-2 text-center text-[11px]">
-          {(["opening", "middlegame", "endgame"] as const).map((phase) => (
-            <div key={phase} className="rounded bg-[#262522] p-1.5">
-              <div className="capitalize text-[#9e9c98]">{phase}</div>
-              <div className="mt-0.5 font-bold text-white">
-                {summary.white.phaseAccuracies[phase]}% /{" "}
-                <span className="text-[#c9c7c3]">{summary.black.phaseAccuracies[phase]}%</span>
+          {(["opening", "middlegame", "endgame"] as const).map((phase) => {
+            const wCount = summary.white.phaseMoveCounts?.[phase] ?? 1;
+            const bCount = summary.black.phaseMoveCounts?.[phase] ?? 1;
+            return (
+              <div key={phase} className="rounded bg-[#262522] p-1.5">
+                <div className="capitalize text-[#9e9c98]">{phase}</div>
+                <div className="mt-0.5 font-bold text-white">
+                  {wCount === 0 && bCount === 0 ? (
+                    <span className="text-[#6b6965]">—</span>
+                  ) : (
+                    <>
+                      {wCount === 0 ? "—" : `${summary.white.phaseAccuracies[phase]}%`} /{" "}
+                      <span className="text-[#c9c7c3]">
+                        {bCount === 0 ? "—" : `${summary.black.phaseAccuracies[phase]}%`}
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

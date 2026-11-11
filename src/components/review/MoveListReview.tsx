@@ -18,14 +18,17 @@ export function MoveListReview({
   currentPly,
   onSelectPly,
 }: MoveListReviewProps) {
-  // Group moves into full-move pairs
+  // Group moves into full-move rows preserving custom FEN starting move numbers
   const rows: { moveNumber: number; white?: AnalyzedMove; black?: AnalyzedMove }[] = [];
-  for (let i = 0; i < moves.length; i += 2) {
-    rows.push({
-      moveNumber: Math.floor(i / 2) + 1,
-      white: moves[i],
-      black: moves[i + 1],
-    });
+  for (const move of moves) {
+    const last = rows[rows.length - 1];
+    if (move.color === "w") {
+      rows.push({ moveNumber: move.moveNumber, white: move });
+    } else if (last && last.moveNumber === move.moveNumber && !last.black) {
+      last.black = move;
+    } else {
+      rows.push({ moveNumber: move.moveNumber, black: move });
+    }
   }
 
   return (
@@ -46,7 +49,7 @@ export function MoveListReview({
       <div className="max-h-72 overflow-y-auto p-1.5">
         {rows.map((row) => (
           <div
-            key={row.moveNumber}
+            key={`${row.moveNumber}-${row.white?.ply ?? row.black?.ply ?? 0}`}
             className="grid grid-cols-[36px_1fr_1fr] items-center gap-1 rounded px-1 py-0.5 text-xs odd:bg-[#262522]/40"
           >
             <span className="font-mono text-[11px] text-[#9e9c98]">{row.moveNumber}.</span>
@@ -65,7 +68,7 @@ export function MoveListReview({
                 <MoveBadgeIcon badge={row.white.classification.badge} size="xs" />
               </button>
             ) : (
-              <span />
+              <span className="px-2 py-1 text-[#6b6965]">...</span>
             )}
 
             {row.black ? (

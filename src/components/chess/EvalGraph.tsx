@@ -15,6 +15,7 @@ import type { AnalyzedMove } from "@/lib/analysis/game-analyzer";
 interface EvalGraphProps {
   moves: AnalyzedMove[];
   currentPly: number;
+  startEval?: { whiteCp: number; whiteMate?: number };
   onSelectPly: (ply: number) => void;
 }
 
@@ -35,13 +36,13 @@ function clampEvalPawns(whiteCp: number, whiteMate?: number): number {
   return Math.max(-10, Math.min(10, parseFloat((whiteCp / 100).toFixed(2))));
 }
 
-export function EvalGraph({ moves, currentPly, onSelectPly }: EvalGraphProps) {
+export function EvalGraph({ moves, currentPly, startEval, onSelectPly }: EvalGraphProps) {
   const { data, middlegamePly, endgamePly } = useMemo(() => {
     const points: ChartPoint[] = [
       {
         ply: 0,
         label: "Start",
-        evalPawns: 0.2,
+        evalPawns: startEval ? clampEvalPawns(startEval.whiteCp, startEval.whiteMate) : 0.2,
         badge: "Start",
         color: "#ffffff",
         isMarker: false,
@@ -83,7 +84,7 @@ export function EvalGraph({ moves, currentPly, onSelectPly }: EvalGraphProps) {
     }
 
     return { data: points, middlegamePly: midPly, endgamePly: endPly };
-  }, [moves]);
+  }, [moves, startEval]);
 
   if (moves.length === 0) return null;
 
@@ -99,8 +100,14 @@ export function EvalGraph({ moves, currentPly, onSelectPly }: EvalGraphProps) {
             data={data}
             margin={{ top: 6, right: 6, left: 6, bottom: 2 }}
             onClick={(state) => {
-              const activeIdx = state?.activeTooltipIndex;
-              if (typeof activeIdx === "number" && data[activeIdx]) {
+              const rawIdx = state?.activeTooltipIndex;
+              const activeIdx =
+                typeof rawIdx === "number"
+                  ? rawIdx
+                  : typeof rawIdx === "string" && rawIdx.trim() !== ""
+                  ? Number(rawIdx)
+                  : NaN;
+              if (Number.isInteger(activeIdx) && activeIdx >= 0 && data[activeIdx]) {
                 onSelectPly(data[activeIdx].ply);
               }
             }}

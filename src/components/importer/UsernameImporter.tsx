@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Search, User, Loader2 } from "lucide-react";
 import type { ChessComPlayerProfile, FormattedGameListItem } from "@/lib/api/chesscom-api";
 import { GameSelectionList } from "./GameSelectionList";
@@ -15,19 +15,33 @@ export function UsernameImporter({ onSelectGame }: UsernameImporterProps) {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ChessComPlayerProfile | null>(null);
   const [games, setGames] = useState<FormattedGameListItem[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const handleFetch = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleaned = username.trim();
     if (!cleaned) return;
 
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(
-        `/api/chesscom?username=${encodeURIComponent(cleaned)}&limit=15`
+        `/api/chesscom?username=${encodeURIComponent(cleaned)}&limit=15`,
+        { signal: controller.signal }
       );
+      if (controller.signal.aborted) return;
       const data = await res.json();
+      if (controller.signal.aborted) return;
       if (!res.ok) {
         setError(data.error || "Could not load games for that player.");
         setProfile(null);
@@ -39,10 +53,18 @@ export function UsernameImporter({ onSelectGame }: UsernameImporterProps) {
       if ((data.games ?? []).length === 0) {
         setError(`No recent standard chess games found for "${cleaned}".`);
       }
-    } catch {
+    } catch (err) {
+      if (
+        (err instanceof DOMException && err.name === "AbortError") ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
       setError("Network error while connecting to Chess.com API.");
     } finally {
-      setLoading(false);
+      if (abortRef.current === controller) {
+        setLoading(false);
+      }
     }
   };
 

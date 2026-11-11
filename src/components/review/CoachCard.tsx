@@ -202,7 +202,7 @@ export function CoachCard({
                   <button
                     type="button"
                     onClick={() => onStepBestMove(1)}
-                    disabled={bestMovePreviewIndex >= bestMovePvSan.length}
+                    disabled={bestMovePreviewIndex >= Math.min(6, bestMovePvSan.length)}
                     aria-label="Step line forward"
                     className="rounded bg-[#312e2b] p-0.5 text-white disabled:opacity-40"
                   >

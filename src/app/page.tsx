@@ -33,6 +33,21 @@ import { UsernameImporter } from "@/components/importer/UsernameImporter";
 type SidebarTab = "review" | "analysis" | "moves";
 type ImporterTab = "samples" | "chesscom" | "pgn";
 
+function normalizeInputToPgn(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const parts = trimmed.split(/\s+/);
+  if (!trimmed.startsWith("[") && parts.length >= 4 && parts.length <= 6 && parts[0].includes("/")) {
+    try {
+      const check = new Chess(trimmed);
+      return `[SetUp "1"]\n[FEN "${check.fen()}"]\n\n*`;
+    } catch {
+      // Fall through so parsePgnGame reports a consistent error
+    }
+  }
+  return raw;
+}
+
 export default function GameReviewPage() {
   const {
     pgnInput,
@@ -74,7 +89,8 @@ export default function GameReviewPage() {
   const [importerTab, setImporterTab] = useState<ImporterTab>("samples");
   const [depth, setDepth] = useState<number>(14);
   const [boardTheme, setBoardTheme] = useState<BoardThemeId>("green");
-  const [failedExplainPlies, setFailedExplainPlies] = useState<Record<number, boolean>>({});
+  const [analysisRunId, setAnalysisRunId] = useState(0);
+  const [failedExplainPlies, setFailedExplainPlies] = useState<Record<string, boolean>>({});
   const [customPgnDraft, setCustomPgnDraft] = useState(SAMPLE_GAMES[1].pgn);
 
   const engineRef = useRef<ChessEngine | null>(null);
@@ -90,72 +106,35 @@ export default function GameReviewPage() {
       const engine = createBrowserStockfishEngine();
       engineRef.current = engine;
 
-      setPgnInput(pgn);
+      const normalizedPgn = normalizeInputToPgn(pgn);
+      setAnalysisRunId((n) => n + 1);
+      setFailedExplainPlies({});
+      setPgnInput(normalizedPgn);
       setShowLoaderModal(false);
       setAnalyzing(0, 1);
 
       if (autoFlipColor === "black" && !useReviewStore.getState().boardFlipped) {
         flipBoard();
-      } else if (autoFlipColor === "white" && useReviewStore.getState().boardFlipped) {
+      } else if (autoFlipColor !== "black" && useReviewStore.getState().boardFlipped) {
         flipBoard();
       }
 
       try {
-        const result = await analyzeGame(pgn, engine, {
+        const result = await analyzeGame(normalizedPgn, engine, {
           depth,
           multiPv: 3,
           signal: controller.signal,
-          onProgress: (completed, total) => setAnalyzing(completed, total),
+          onProgress: (completed, total) => {
+            if (!controller.signal.aborted) {
+              setAnalyzing(completed, total);
+            }
+          },
         });
 
         if (controller.signal.aborted) return;
         setAnalysis(result);
-
-        // Fetch Game Storyline asynchronously
-        const turningMove = result.moves.find((m) => m.classification.isKeyMoment);
-        fetch("/api/explain", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: "storyline",
-            payload: {
-              whiteName: result.headers.White || "White",
-              blackName: result.headers.Black || "Black",
-              result: result.headers.Result || "*",
-              openingName: result.opening.opening?.name,
-              whiteAccuracy: result.summary.white.accuracy,
-              blackAccuracy: result.summary.black.accuracy,
-              whiteElo: result.summary.white.estimatedElo,
-              blackElo: result.summary.black.estimatedElo,
-              phaseAccuracies: {
-                opening: {
-                  white: result.summary.white.phaseAccuracies.opening,
-                  black: result.summary.black.phaseAccuracies.opening,
-                },
-                middlegame: {
-                  white: result.summary.white.phaseAccuracies.middlegame,
-                  black: result.summary.black.phaseAccuracies.middlegame,
-                },
-                endgame: {
-                  white: result.summary.white.phaseAccuracies.endgame,
-                  black: result.summary.black.phaseAccuracies.endgame,
-                },
-              },
-              keyMomentCount: result.moves.filter((m) => m.classification.isKeyMoment).length,
-              turningPointMove: turningMove
-                ? `${turningMove.moveNumber}${turningMove.color === "w" ? "." : "..."} ${turningMove.san}`
-                : undefined,
-              personaId,
-            },
-          }),
-        })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((story) => {
-            if (story) setStoryline(story);
-          })
-          .catch(() => undefined);
       } catch (err) {
-        if ((err as Error)?.name === "AbortError") return;
+        if (controller.signal.aborted || (err as Error)?.name === "AbortError") return;
         const msg = err instanceof Error ? err.message : "Failed to analyze PGN.";
         setAnalysisError(msg);
       } finally {
@@ -165,8 +144,65 @@ export default function GameReviewPage() {
         }
       }
     },
-    [depth, flipBoard, personaId, setAnalysis, setAnalysisError, setAnalyzing, setPgnInput, setStoryline]
+    [depth, flipBoard, setAnalysis, setAnalysisError, setAnalyzing, setPgnInput]
   );
+
+  // Fetch / re-fetch grounded Game Storyline when analysis finishes or persona changes
+  useEffect(() => {
+    if (!analysis || analysisStatus !== "complete" || storyline) return;
+
+    const controller = new AbortController();
+    const turningMove = analysis.moves.find((m) => m.classification.isKeyMoment);
+
+    fetch("/api/explain", {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "storyline",
+        payload: {
+          whiteName: analysis.headers.White || "White",
+          blackName: analysis.headers.Black || "Black",
+          result: analysis.headers.Result || "*",
+          openingName: analysis.opening.opening?.name,
+          whiteAccuracy: analysis.summary.white.accuracy,
+          blackAccuracy: analysis.summary.black.accuracy,
+          whiteElo: analysis.summary.white.estimatedElo,
+          blackElo: analysis.summary.black.estimatedElo,
+          phaseAccuracies: {
+            opening: {
+              white: analysis.summary.white.phaseAccuracies.opening,
+              black: analysis.summary.black.phaseAccuracies.opening,
+            },
+            middlegame: {
+              white: analysis.summary.white.phaseAccuracies.middlegame,
+              black: analysis.summary.black.phaseAccuracies.middlegame,
+            },
+            endgame: {
+              white: analysis.summary.white.phaseAccuracies.endgame,
+              black: analysis.summary.black.phaseAccuracies.endgame,
+            },
+          },
+          keyMomentCount: analysis.moves.filter((m) => m.classification.isKeyMoment).length,
+          turningPointMove: turningMove
+            ? `${turningMove.moveNumber}${turningMove.color === "w" ? "." : "..."} ${turningMove.san}`
+            : undefined,
+          personaId,
+        },
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((story) => {
+        if (!controller.signal.aborted && story) {
+          setStoryline(story);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      controller.abort();
+    };
+  }, [analysis, analysisStatus, personaId, setStoryline, storyline]);
 
   // Auto-load Opera Game on initial mount if idle
   useEffect(() => {
@@ -214,18 +250,23 @@ export default function GameReviewPage() {
     [analysis, currentPly]
   );
 
+  const explainKey = activeMove
+    ? `${analysisRunId}:${personaId}:${activeMove.ply}`
+    : null;
+
   // Fetch grounded coach explanation lazily when navigating to a ply
   useEffect(() => {
-    if (!analysis || !activeMove) return;
-    if (explanations[activeMove.ply] || failedExplainPlies[activeMove.ply]) return;
+    if (!analysis || !activeMove || !explainKey) return;
+    if (explanations[activeMove.ply] || failedExplainPlies[explainKey]) return;
 
     const prevMoveObj =
       activeMove.ply >= 2 ? analysis.moves[activeMove.ply - 2] : undefined;
 
-    let cancelled = false;
+    const controller = new AbortController();
 
     fetch("/api/explain", {
       method: "POST",
+      signal: controller.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         mode: "move",
@@ -235,36 +276,38 @@ export default function GameReviewPage() {
           moveNumber: activeMove.moveNumber,
           badge: activeMove.classification.badge,
           openingName: analysis.opening.opening?.name,
-          evalBefore: prevMoveObj?.evalLabel ?? "+0.2",
+          evalBefore: prevMoveObj?.evalLabel ?? analysis.startEval?.evalLabel ?? "+0.2",
           evalAfter: activeMove.evalLabel,
           deltaWP: activeMove.classification.deltaWP,
           engineBestMove: activeMove.bestMoveSan,
           bestMovePV: activeMove.bestMovePvSan,
+          refutationPV: activeMove.altPvSan,
           tacticalContext: activeMove.tacticalContext,
           personaId,
+          fenBefore: activeMove.fenBefore,
           fenAfter: activeMove.fenAfter,
         },
       }),
     })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         if (data) {
           setExplanation(activeMove.ply, data);
         } else {
-          setFailedExplainPlies((prev) => ({ ...prev, [activeMove.ply]: true }));
+          setFailedExplainPlies((prev) => ({ ...prev, [explainKey]: true }));
         }
       })
       .catch(() => {
-        if (!cancelled) {
-          setFailedExplainPlies((prev) => ({ ...prev, [activeMove.ply]: true }));
+        if (!controller.signal.aborted) {
+          setFailedExplainPlies((prev) => ({ ...prev, [explainKey]: true }));
         }
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [activeMove, analysis, explanations, failedExplainPlies, personaId, setExplanation]);
+  }, [activeMove, analysis, explainKey, explanations, failedExplainPlies, personaId, setExplanation]);
 
   // Compute displayed FEN, move highlight, badge, and arrows
   const boardView = useMemo(() => {
@@ -278,9 +321,9 @@ export default function GameReviewPage() {
         lastMove: null,
         badge: null,
         arrows: [] as BoardArrow[],
-        whiteCp: activeMove?.whiteCp ?? 20,
-        whiteMate: activeMove?.whiteMate,
-        evalLabel: activeMove?.evalLabel ?? "+0.2",
+        whiteCp: activeMove?.whiteCp ?? analysis?.startEval?.whiteCp ?? 20,
+        whiteMate: activeMove?.whiteMate ?? analysis?.startEval?.whiteMate,
+        evalLabel: activeMove?.evalLabel ?? analysis?.startEval?.evalLabel ?? "+0.2",
       };
     }
 
@@ -290,9 +333,9 @@ export default function GameReviewPage() {
         lastMove: null,
         badge: null,
         arrows: [] as BoardArrow[],
-        whiteCp: 20,
-        whiteMate: undefined,
-        evalLabel: "+0.2",
+        whiteCp: analysis?.startEval?.whiteCp ?? 20,
+        whiteMate: analysis?.startEval?.whiteMate,
+        evalLabel: analysis?.startEval?.evalLabel ?? "+0.2",
       };
     }
 
@@ -301,8 +344,12 @@ export default function GameReviewPage() {
       const c = new Chess(activeMove.fenBefore);
       let lastPreviewMove: { from: Square; to: Square } | null = null;
       for (let i = 0; i < bestMovePreviewIndex && i < activeMove.bestMovePvSan.length; i++) {
-        const mv = c.move(activeMove.bestMovePvSan[i]);
-        if (mv) lastPreviewMove = { from: mv.from, to: mv.to };
+        try {
+          const mv = c.move(activeMove.bestMovePvSan[i]);
+          if (mv) lastPreviewMove = { from: mv.from, to: mv.to };
+        } catch {
+          break;
+        }
       }
       return {
         fen: c.fen(),
@@ -344,7 +391,7 @@ export default function GameReviewPage() {
       whiteMate: activeMove.whiteMate,
       evalLabel: activeMove.evalLabel,
     };
-  }, [activeMove, analysis?.startFen, bestMovePreviewIndex, retryState, showBestMove]);
+  }, [activeMove, analysis?.startEval, analysis?.startFen, bestMovePreviewIndex, retryState, showBestMove]);
 
   const whiteName = analysis?.headers.White || "White";
   const blackName = analysis?.headers.Black || "Black";
@@ -485,9 +532,9 @@ export default function GameReviewPage() {
                   flipped={boardFlipped}
                   interactive={retryState.active}
                   theme={boardTheme}
-                  onMove={(from, to) => {
+                  onMove={(from, to, promotion) => {
                     if (retryState.active) {
-                      submitRetryMove(from, to);
+                      submitRetryMove(from, to, promotion);
                     }
                   }}
                 />
@@ -615,7 +662,7 @@ export default function GameReviewPage() {
                     showBestMove={showBestMove}
                     bestMovePreviewIndex={bestMovePreviewIndex}
                     loadingExplanation={Boolean(
-                      activeMove && !explanations[activeMove.ply] && !failedExplainPlies[activeMove.ply]
+                      activeMove && explainKey && !explanations[activeMove.ply] && !failedExplainPlies[explainKey]
                     )}
                     onStartRetry={startRetryMode}
                     onExitRetry={exitRetryMode}
@@ -626,6 +673,7 @@ export default function GameReviewPage() {
                   <EvalGraph
                     moves={analysis.moves}
                     currentPly={currentPly}
+                    startEval={analysis.startEval}
                     onSelectPly={jumpToPly}
                   />
 
@@ -807,7 +855,7 @@ export default function GameReviewPage() {
                     rows={7}
                     value={customPgnDraft}
                     onChange={(e) => setCustomPgnDraft(e.target.value)}
-                    placeholder="Paste PGN here (e.g. 1. e4 e5 2. Nf3 Nc6...)"
+                    placeholder="Paste PGN or FEN here (e.g. 1. e4 e5 2. Nf3 Nc6... or rnbqkbnr/...)"
                     className="w-full rounded border border-[#3d3b38] bg-[#21201d] p-2.5 font-mono text-xs text-white placeholder-[#9e9c98] focus:border-[#96bc4b] focus:outline-none"
                   />
                   <button
@@ -817,7 +865,7 @@ export default function GameReviewPage() {
                     className="inline-flex w-full items-center justify-center gap-2 rounded bg-[#96bc4b] py-2 text-sm font-extrabold text-[#1a1917] transition hover:bg-[#a6cc59] disabled:opacity-50"
                   >
                     <CheckCircle2 className="h-4 w-4" />
-                    Analyze PGN
+                    Analyze PGN / FEN
                   </button>
                 </div>
               )}
