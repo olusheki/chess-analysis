@@ -155,8 +155,8 @@ describe("win-probability engine math", () => {
       expect(withOneBlunder).toBeGreaterThan(20);
     });
 
-    it("prevents a single blunder among solid moves from collapsing to ~50% via symmetric leverage-weighted 8.0 harmonic floor and downweights garbage-time moves symmetrically", () => {
-      // Game 9 shape: 1 blunder in 16 moves (~68% Chess.com) should stay above 54% (evaluates to 57.3%), not ~23% harmonic collapse
+    it("scales harmonic floor & blend adaptively via disaster factor (raises 1-blunder floor, preserves collapse on multi-blunder games, and downweights garbage-time moves)", () => {
+      // Game 9 shape: 1 blunder in 16 moves (~68% Chess.com) raises above 59% with ~10.0 calm floor
       const oneBlunderSixteenMoves = calculateOverallGameAccuracy([
         { deltaWP: 0, wpBest: 55 },
         { deltaWP: 0, wpBest: 54 },
@@ -169,7 +169,7 @@ describe("win-probability engine math", () => {
         { deltaWP: 73.7, wpBest: 83.9 }, // single ~1% accuracy blunder
         ...Array.from({ length: 7 }, () => ({ deltaWP: 0, wpBest: 99.8 })),
       ]);
-      expect(oneBlunderSixteenMoves).toBeGreaterThan(54);
+      expect(oneBlunderSixteenMoves).toBeGreaterThan(59);
 
       // Game 2 Black shape: early mistake+blunder in balanced positions followed by 20 dead-lost garbage-time moves
       const deadLostGarbage = calculateOverallGameAccuracy([
@@ -180,6 +180,19 @@ describe("win-probability engine math", () => {
         ...Array.from({ length: 20 }, () => ({ deltaWP: 0.1, wpBest: 0.1 })),
       ]);
       expect(deadLostGarbage).toBeLessThan(76);
+
+      // Game 10 pistapoc shape: repeated severe competitive blunders trigger full disaster floor (1.5) + harmonic tilt
+      const multiBlunderCollapse = calculateOverallGameAccuracy([
+        { deltaWP: 28, wpBest: 50 },
+        { deltaWP: 35, wpBest: 48 },
+        { deltaWP: 42, wpBest: 52 },
+        { deltaWP: 55, wpBest: 46 },
+        { deltaWP: 30, wpBest: 45 },
+        { deltaWP: 0, wpBest: 45 },
+        { deltaWP: 0, wpBest: 44 },
+        { deltaWP: 0, wpBest: 43 },
+      ]);
+      expect(multiBlunderCollapse).toBeLessThan(32);
     });
 
     it("penalizes delaying immediate forced mate (e.g. missing M1 and settling for M8)", () => {

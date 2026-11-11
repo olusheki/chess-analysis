@@ -145,10 +145,10 @@ const MUTANTS = [
     testFile: "tests/api-routes.test.ts",
   },
   {
-    name: "M19: Reintroduce unweighted 2.0 harmonic collapse in win-probability.ts",
+    name: "M19: Reintroduce low 1.0 harmonic floor collapse in win-probability.ts",
     file: "src/lib/engine/win-probability.ts",
-    target: "weightedInvSum += leverageWeight / Math.max(8.0, moveAccuracy);",
-    replacement: "weightedInvSum += leverageWeight / Math.max(1.0, moveAccuracy);",
+    target: "const harmonicFloor = 10.0 - disasterFactor * 8.5;",
+    replacement: "const harmonicFloor = 1.0;",
     testFile: "tests/win-probability.test.ts",
   },
   {
@@ -229,6 +229,14 @@ const MUTANTS = [
     target: "const playerThreatNote = describeErrorThreats(tacticalContext, oppLabel, true);",
     replacement: "const playerThreatNote = \"\";",
     testFile: "tests/gemini-coach.test.ts",
+  },
+  {
+    name: "M31: Disable adaptive disasterFactor collapse on multi-blunder games in win-probability.ts",
+    file: "src/lib/engine/win-probability.ts",
+    target:
+      "const disasterFactor = Math.min(1, Math.max(0, (72.0 - weightedCompMean) / 25.0));",
+    replacement: "const disasterFactor = 0;",
+    testFile: "tests/win-probability.test.ts",
   },
 ];
 

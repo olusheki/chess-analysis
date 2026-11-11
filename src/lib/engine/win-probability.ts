@@ -97,12 +97,12 @@ export function calculateMoveAccuracy(deltaWP: number): number {
 export function calculateOverallGameAccuracy(
   moves: { deltaWP: number; wpBest: number; isBook?: boolean; isForced?: boolean }[]
 ): number {
-  const nonTrivialMoves = moves.filter(m => !m.isBook && !m.isForced);
+  const nonTrivialMoves = moves.filter((m) => !m.isBook && !m.isForced);
   if (nonTrivialMoves.length === 0) return 100.0;
 
   let totalWeightedAccuracy = 0;
   let totalWeight = 0;
-  let weightedInvSum = 0;
+  const moveEntries: { moveAccuracy: number; leverageWeight: number }[] = [];
 
   for (const move of nonTrivialMoves) {
     // Dynamic leverage weighting applies symmetrically to BOTH arithmetic and harmonic means
@@ -112,13 +112,22 @@ export function calculateOverallGameAccuracy(
 
     totalWeightedAccuracy += moveAccuracy * leverageWeight;
     totalWeight += leverageWeight;
-    // Calibrated harmonic floor (8.0) prevents 1 blunder out of 16 moves from collapsing accuracy
-    weightedInvSum += leverageWeight / Math.max(8.0, moveAccuracy);
+    moveEntries.push({ moveAccuracy, leverageWeight });
   }
 
   const weightedCompMean = totalWeightedAccuracy / totalWeight;
+  // Adaptive disaster-scaled harmonic floor (10.0 down to 1.5) & arithmetic blend (0.4 down to 0.15)
+  const disasterFactor = Math.min(1, Math.max(0, (72.0 - weightedCompMean) / 25.0));
+  const harmonicFloor = 10.0 - disasterFactor * 8.5;
+
+  let weightedInvSum = 0;
+  for (const entry of moveEntries) {
+    weightedInvSum += entry.leverageWeight / Math.max(harmonicFloor, entry.moveAccuracy);
+  }
+
   const weightedHarmonicMean = totalWeight / weightedInvSum;
-  const blended = 0.4 * weightedCompMean + 0.6 * weightedHarmonicMean;
+  const arithWeight = Math.max(0.15, 0.4 - 0.25 * disasterFactor);
+  const blended = arithWeight * weightedCompMean + (1 - arithWeight) * weightedHarmonicMean;
 
   return parseFloat(Math.min(100, Math.max(0, blended)).toFixed(1));
 }
