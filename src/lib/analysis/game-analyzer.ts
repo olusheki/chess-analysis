@@ -150,7 +150,13 @@ export function evaluateSingleAnalyzedMove(input: EvaluateSingleMoveInput): Anal
     move.san.includes("x") &&
     prevMove!.to === move.to;
   const movedPiece = chessBefore.get(move.from);
-  const capturedPiece = chessBefore.get(move.to);
+  const directDestPiece = chessBefore.get(move.to);
+  const isEnPassantCapture =
+    movedPiece?.type === "p" && move.from[0] !== move.to[0] && !directDestPiece;
+  const capturedSq = isEnPassantCapture
+    ? (`${move.to[0]}${move.from[1]}` as Square)
+    : move.to;
+  const capturedPiece = isEnPassantCapture ? chessBefore.get(capturedSq) : directDestPiece;
   const capturedVal = capturedPiece ? PIECE_VALUES[capturedPiece.type] : 0;
   const replyGainOnDest =
     capturedVal >= 1
@@ -162,9 +168,12 @@ export function evaluateSingleAnalyzedMove(input: EvaluateSingleMoveInput): Anal
       : 0;
   const isBlunderedSquareCapture =
     Boolean(prevMove) &&
-    prevMove!.to === move.to &&
+    prevMove!.to === capturedSq &&
     (prevDeltaWP ?? 0) >= 15.0 &&
-    capturedVal >= (movedPiece ? PIECE_VALUES[movedPiece.type] : 0);
+    capturedVal >= (movedPiece ? PIECE_VALUES[movedPiece.type] : 0) &&
+    (replyGainOnDest === 0 ||
+      capturedVal - replyGainOnDest >= 4 ||
+      !/[+#]$/.test(move.san));
   const isObviousFreeCapture =
     isBlunderedSquareCapture ||
     (capturedVal >= 5

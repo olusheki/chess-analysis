@@ -18,7 +18,7 @@ export interface GameOpeningAnalysis {
   insight: string;
 }
 
-type CompactEcoEntry = [eco: string, name: string, moves: string];
+type CompactEcoEntry = [eco: string | null, name: string, moves: string];
 
 const ecoMap = ecoOpeningsRaw as unknown as Record<string, CompactEcoEntry>;
 
@@ -98,7 +98,7 @@ export function lookupOpeningByFen(fen: string): OpeningMatch | null {
 
   if (!entry) return null;
   return {
-    eco: entry[0],
+    eco: entry[0] ?? "",
     name: entry[1],
     moves: entry[2],
     fenKey: matchedKey,
@@ -349,7 +349,7 @@ export function getOpeningInsight(eco: string, name: string): string {
     }
   }
 
-  const family = eco.charAt(0).toUpperCase();
+  const family = (eco ?? "").trim().charAt(0).toUpperCase();
   switch (family) {
     case "A":
       return `In the ${name} (${eco}), both sides maneuver in flank or irregular structures, competing for long-term central and diagonal control.`;

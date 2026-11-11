@@ -158,4 +158,27 @@ describe("opening-book (ECO classifier & transposition matcher)", () => {
     const goldsmithResults = searchOpenings("Goldsmith", 20);
     expect(goldsmithResults.some((m) => m.name.includes("2. d4 g6"))).toBe(true);
   });
+
+  it("handles null ECO entries in eco-openings.json without throwing in lookupOpeningByFen, classifyGameOpenings, or getOpeningInsight", () => {
+    const birdSymmetricalFen =
+      "rnbqkbnr/ppppp1pp/8/5p2/3P1P2/8/PPP1P1PP/RNBQKBNR b KQkq - 0 2";
+    const match = lookupOpeningByFen(birdSymmetricalFen);
+    expect(match).not.toBeNull();
+    expect(typeof match?.eco).toBe("string");
+    expect(match?.eco).toBe("");
+    expect(match?.name).toContain("Bird");
+
+    const classified = classifyGameOpenings(["f4", "f5", "d4"]);
+    expect(classified.opening?.eco).toBe("");
+    expect(classified.insight.length).toBeGreaterThan(0);
+    expect(classified.insight).not.toContain("()");
+    expect(classified.insight).not.toContain("null");
+
+    expect(() =>
+      getOpeningInsight(null as unknown as string, "Unmatched Custom Line")
+    ).not.toThrow();
+    const fallbackInsight = getOpeningInsight("", "Unmatched Custom Line");
+    expect(fallbackInsight).toContain("Unmatched Custom Line");
+    expect(fallbackInsight).not.toContain("()");
+  });
 });

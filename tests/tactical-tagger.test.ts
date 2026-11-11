@@ -431,4 +431,76 @@ describe("tactical-tagger (deterministic board feature detector)", () => {
     expect(bestGuard.tags).not.toContain("MISSED_FORK");
     expect(bestGuard.tags).not.toContain("ALLOWS_MATE");
   });
+
+  it("suppresses false TACTICAL_FORK, ALLOWS_FORK, and MISSED_FORK when a higher-value attacker targets two defended lesser pieces, while still detecting undefended forks", () => {
+    const defendedTargetsFen = "4k3/p7/1n6/6p1/5n2/8/8/3QK3 w - - 0 15";
+    const ctxFalseFork = playAndExtract(defendedTargetsFen, "Qd4", 15);
+    expect(ctxFalseFork.tags).not.toContain("TACTICAL_FORK");
+    expect(ctxFalseFork.forkTargets).toBeUndefined();
+
+    // Remove the defending pawns: Queen double attack on two undefended Knights IS a valid fork
+    const undefendedTargetsFen = "4k3/8/1n6/8/5n2/8/8/3QK3 w - - 0 15";
+    const ctxTrueFork = playAndExtract(undefendedTargetsFen, "Qd4", 15);
+    expect(ctxTrueFork.tags).toContain("TACTICAL_FORK");
+    expect(ctxTrueFork.forkTargets).toHaveLength(2);
+
+    // ALLOWS_FORK must also filter defended lesser Queen targets
+    const allowsBefore = "4k3/p7/1n6/6p1/5n2/8/8/3QK3 b - - 0 15";
+    const chessAllows = new Chess(allowsBefore);
+    chessAllows.move("Kf8");
+    const ctxAllows = extractTacticalContext(allowsBefore, chessAllows.fen(), "Kf8", 15, {
+      refutationPvSan: ["Qd4"],
+      badge: "Blunder",
+    });
+    expect(ctxAllows.tags).not.toContain("ALLOWS_FORK");
+
+    // MISSED_FORK must also filter defended lesser Queen targets
+    const chessMiss = new Chess(defendedTargetsFen);
+    chessMiss.move("Kd2");
+    const ctxMiss = extractTacticalContext(defendedTargetsFen, chessMiss.fen(), "Kd2", 15, {
+      bestMoveSan: "Qd4",
+      badge: "Miss",
+    });
+    expect(ctxMiss.tags).not.toContain("MISSED_FORK");
+  });
+
+  it("prioritizes ALLOWS_MATE over HANGING_PIECE when the refutation is a capture-mate like Qxf7#", () => {
+    const beforeA6 = "r1bqkbnr/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 3 3";
+    const chess = new Chess(beforeA6);
+    chess.move("a6");
+    const ctx = extractTacticalContext(beforeA6, chess.fen(), "a6", 3, {
+      refutationPvSan: ["Qxf7#"],
+      badge: "Blunder",
+    });
+    expect(ctx.tags).toContain("ALLOWS_MATE");
+    expect(ctx.allowedThreat?.kind).toBe("CHECKMATE");
+    expect(ctx.allowedThreat?.refutationMoveSan).toBe("Qxf7#");
+    expect(ctx.tags).not.toContain("HANGING_PIECE");
+    expect(ctx.hangingPieceDetails).toBeUndefined();
+  });
+
+  it("marks exchange wins on defended Rooks as isExchange: true vs full Rook wins as non-exchange", () => {
+    const exchangeFen = "4k3/2p5/3r4/8/2N5/8/8/4K3 w - - 0 15";
+    const cEx = new Chess(exchangeFen);
+    cEx.move("Kf1");
+    const ctxExchange = extractTacticalContext(exchangeFen, cEx.fen(), "Kf1", 15, {
+      bestMoveSan: "Nxd6+",
+      badge: "Miss",
+    });
+    expect(ctxExchange.tags).toContain("MISSED_CAPTURE");
+    expect(ctxExchange.missedTactic?.kind).toBe("FREE_CAPTURE");
+    expect(ctxExchange.missedTactic?.netGain).toBe(2);
+    expect(ctxExchange.missedTactic?.isExchange).toBe(true);
+
+    const fullRookFen = "4k3/8/3r4/8/2N5/8/8/4K3 w - - 0 15";
+    const cFull = new Chess(fullRookFen);
+    cFull.move("Kf1");
+    const ctxFull = extractTacticalContext(fullRookFen, cFull.fen(), "Kf1", 15, {
+      bestMoveSan: "Nxd6+",
+      badge: "Miss",
+    });
+    expect(ctxFull.tags).toContain("MISSED_CAPTURE");
+    expect(ctxFull.missedTactic?.netGain).toBe(5);
+    expect(ctxFull.missedTactic?.isExchange).toBeFalsy();
+  });
 });

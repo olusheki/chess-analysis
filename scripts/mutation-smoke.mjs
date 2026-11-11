@@ -259,6 +259,49 @@ const MUTANTS = [
     replacement: "return ecoMap[key];",
     testFile: "tests/opening-book.test.ts",
   },
+  {
+    name: "M35: Restore unguarded null ECO passthrough in lookupOpeningByFen in opening-book.ts",
+    file: "src/lib/analysis/opening-book.ts",
+    target: 'eco: entry[0] ?? "",',
+    replacement: "eco: entry[0],",
+    testFile: "tests/opening-book.test.ts",
+  },
+  {
+    name: "M36: Bypass defended lesser-target filter in findSafeForkTargets in tactical-tagger.ts",
+    file: "src/lib/analysis/tactical-tagger.ts",
+    target: "!chess.isAttacked(targetSq, defenderColor)",
+    replacement: "true",
+    testFile: "tests/tactical-tagger.test.ts",
+  },
+  {
+    name: "M37: Ignore capture-mate guard in resolveRefutationHangingPiece in tactical-tagger.ts",
+    file: "src/lib/analysis/tactical-tagger.ts",
+    target: "if (!refutationPlayed || refutationPlayed.chess.isCheckmate()) return undefined;",
+    replacement: "if (!refutationPlayed) return undefined;",
+    testFile: "tests/tactical-tagger.test.ts",
+  },
+  {
+    name: "M38: Skip mate-first Blunder headline branch in offline-coach.ts",
+    file: "src/lib/ai/offline-coach.ts",
+    target: "if (allowedMateSan) {",
+    replacement: "if (false && allowedMateSan) {",
+    testFile: "tests/gemini-coach.test.ts",
+  },
+  {
+    name: "M39: Disable en passant capture detection in game-analyzer.ts",
+    file: "src/lib/analysis/game-analyzer.ts",
+    target:
+      'const isEnPassantCapture =\n    movedPiece?.type === "p" && move.from[0] !== move.to[0] && !directDestPiece;',
+    replacement: "const isEnPassantCapture = false;",
+    testFile: "tests/game-analyzer.test.ts",
+  },
+  {
+    name: "M40: Suppress checking deflection captures on blundered squares in game-analyzer.ts",
+    file: "src/lib/analysis/game-analyzer.ts",
+    target: "!/[+#]$/.test(move.san));",
+    replacement: "true);",
+    testFile: "tests/game-analyzer.test.ts",
+  },
 ];
 
 let killed = 0;

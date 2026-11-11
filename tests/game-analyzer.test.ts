@@ -656,4 +656,110 @@ describe("game-analyzer (full Tier 1 + Tier 2 pipeline)", () => {
     expect(moveQxe6.san).toBe("Qxe6");
     expect(moveQxe6.classification.badge).toBe("Best");
   });
+
+  it("suppresses Great on obvious free en passant grabs after major blunders while allowing Great on defended deflection checks", async () => {
+    // 1. En passant capture winning undefended pawn after >= 25% WP blunder stays Best
+    const epPgn = `[SetUp "1"]
+[FEN "4k3/3p4/8/4P3/8/8/8/4K3 b - - 0 20"]
+
+20... d5 21. exd6 *`;
+    const cEp = new Chess("4k3/3p4/8/4P3/8/8/8/4K3 b - - 0 20");
+    const epFen0 = cEp.fen();
+    cEp.move("d5");
+    const epFen1 = cEp.fen();
+    cEp.move("exd6");
+    const epFen2 = cEp.fen();
+
+    const engineEp: ChessEngine = {
+      async evaluatePosition(fen, depth) {
+        if (fen === epFen0) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "e8f7",
+            bestMoveSan: "Kf7",
+            whiteCp: 50,
+            lines: [{ multipv: 1, cp: 50, pvUci: ["e8f7"], pvSan: ["Kf7"] }],
+          };
+        }
+        if (fen === epFen1) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "e5d6",
+            bestMoveSan: "exd6",
+            whiteCp: 450,
+            lines: [
+              { multipv: 1, cp: 450, pvUci: ["e5d6"], pvSan: ["exd6"] },
+              { multipv: 2, cp: 0, pvUci: ["e1d2"], pvSan: ["Kd2"] },
+            ],
+          };
+        }
+        return {
+          fen,
+          depth,
+          bestMoveUci: "e8d7",
+          bestMoveSan: "Kd7",
+          whiteCp: 450,
+          lines: [{ multipv: 1, cp: 450, pvUci: ["e8d7"], pvSan: ["Kd7"] }],
+        };
+      },
+      dispose() {},
+    };
+    const resEp = await analyzeGame(epPgn, engineEp, { depth: 12 });
+    const moveExd6 = resEp.moves[1];
+    expect(moveExd6.san).toBe("exd6");
+    expect(moveExd6.classification.badge).toBe("Best");
+
+    // 2. Defended deflection check Bxd7+ onto newly blundered square preserves Great
+    const deflectPgn = `[SetUp "1"]
+[FEN "1n2k3/2q5/8/1B6/8/8/8/4K3 b - - 0 20"]
+
+20... Nd7 21. Bxd7+ *`;
+    const cDef = new Chess("1n2k3/2q5/8/1B6/8/8/8/4K3 b - - 0 20");
+    const defFen0 = cDef.fen();
+    cDef.move("Nd7");
+    const defFen1 = cDef.fen();
+
+    const engineDef: ChessEngine = {
+      async evaluatePosition(fen, depth) {
+        if (fen === defFen0) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "b8c6",
+            bestMoveSan: "Nc6",
+            whiteCp: 50,
+            lines: [{ multipv: 1, cp: 50, pvUci: ["b8c6"], pvSan: ["Nc6"] }],
+          };
+        }
+        if (fen === defFen1) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "b5d7",
+            bestMoveSan: "Bxd7+",
+            whiteCp: 500,
+            lines: [
+              { multipv: 1, cp: 500, pvUci: ["b5d7"], pvSan: ["Bxd7+"] },
+              { multipv: 2, cp: -50, pvUci: ["b5a4"], pvSan: ["Ba4"] },
+            ],
+          };
+        }
+        return {
+          fen,
+          depth,
+          bestMoveUci: "c7d7",
+          bestMoveSan: "Qxd7",
+          whiteCp: 500,
+          lines: [{ multipv: 1, cp: 500, pvUci: ["c7d7"], pvSan: ["Qxd7"] }],
+        };
+      },
+      dispose() {},
+    };
+    const resDef = await analyzeGame(deflectPgn, engineDef, { depth: 12 });
+    const moveBxd7 = resDef.moves[1];
+    expect(moveBxd7.san).toBe("Bxd7+");
+    expect(moveBxd7.classification.badge).toBe("Great");
+  });
 });

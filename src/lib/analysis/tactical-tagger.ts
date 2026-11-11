@@ -36,6 +36,7 @@ export interface TacticalThreatDetail {
   targetSquares?: Square[];
   targetSummary?: string;
   netGain?: number;
+  isExchange?: boolean;
 }
 
 export interface ExtractTacticalOptions {
@@ -260,22 +261,32 @@ function findSafeForkTargets(
   chess: Chess,
   destSq: Square,
   attackerColor: Color,
-  defenderColor: Color
+  defenderColor: Color,
+  attackedSquares?: Square[]
 ): { square: Square; piece: string }[] {
   const board = chess.board();
   const movedPiece = chess.get(destSq);
   if (!movedPiece || movedPiece.color !== attackerColor) return [];
 
-  const attacked = getPieceAttackedSquares(board, destSq, attackerColor, movedPiece.type);
+  const attackerVal = PIECE_VALUES[movedPiece.type];
+  const attacked =
+    attackedSquares ?? getPieceAttackedSquares(board, destSq, attackerColor, movedPiece.type);
   const targets: { square: Square; piece: string; sortVal: number }[] = [];
   for (const targetSq of attacked) {
     const [tr, tc] = toCoords(targetSq);
     const targetPiece = board[tr][tc];
-    if (targetPiece && targetPiece.color === defenderColor && targetPiece.type !== "p") {
+    if (
+      targetPiece &&
+      targetPiece.color === defenderColor &&
+      targetPiece.type !== "p" &&
+      (targetPiece.type === "k" ||
+        PIECE_VALUES[targetPiece.type] > attackerVal ||
+        !chess.isAttacked(targetSq, defenderColor))
+    ) {
       targets.push({
         square: targetSq,
         piece: PIECE_NAMES[targetPiece.type],
-        sortVal: targetPiece.type === "k" ? 100 : PIECE_VALUES[targetPiece.type],
+        sortVal: PIECE_VALUES[targetPiece.type],
       });
     }
   }
@@ -311,7 +322,7 @@ function resolveRefutationHangingPiece(
   refutationPlayed: { chess: Chess; move: Move } | null,
   activeColor: Color
 ): TacticalContext["hangingPieceDetails"] {
-  if (!refutationPlayed) return undefined;
+  if (!refutationPlayed || refutationPlayed.chess.isCheckmate()) return undefined;
   const capSq = getCapturedSquare(refutationPlayed.move);
   if (!capSq) return undefined;
 
@@ -395,17 +406,24 @@ function detectAllowedAndMissedThreats(
         );
         const allowPawnCap =
           options?.badge === undefined || SEVERE_ERROR_BADGES.has(options.badge);
-
-        if (netGain >= 2 && capSq) {
-          const victim = bestMove.captured ? PIECE_NAMES[bestMove.captured] : "Piece";
+        const setMissedCapture = () => {
+          if (!capSq || !bestMove.captured) return;
           addTag("MISSED_CAPTURE");
           missedTactic = {
             kind: "FREE_CAPTURE",
             missedMoveSan: bestMove.san,
             targetSquares: [capSq],
-            targetSummary: `${victim} on ${capSq}`,
+            targetSummary: `${PIECE_NAMES[bestMove.captured]} on ${capSq}`,
             netGain,
+            isExchange:
+              bestMove.captured === "r" &&
+              !bestMove.promotion &&
+              PIECE_VALUES[bestMove.captured] - netGain >= 2,
           };
+        };
+
+        if (netGain >= 2 && capSq && bestMove.captured) {
+          setMissedCapture();
         } else if (missedForks.length >= 2) {
           addTag("MISSED_FORK");
           missedTactic = {
@@ -414,16 +432,8 @@ function detectAllowedAndMissedThreats(
             targetSquares: missedForks.slice(0, 2).map((t) => t.square),
             targetSummary: formatTargetSummary(missedForks),
           };
-        } else if (allowPawnCap && netGain >= 1 && capSq) {
-          const victim = bestMove.captured ? PIECE_NAMES[bestMove.captured] : "Pawn";
-          addTag("MISSED_CAPTURE");
-          missedTactic = {
-            kind: "FREE_CAPTURE",
-            missedMoveSan: bestMove.san,
-            targetSquares: [capSq],
-            targetSummary: `${victim} on ${capSq}`,
-            netGain,
-          };
+        } else if (allowPawnCap && netGain >= 1 && capSq && bestMove.captured) {
+          setMissedCapture();
         }
       }
     }
@@ -520,7 +530,7 @@ export function extractTacticalContext(
 
   // 3. Hanging Piece Detection: prioritize the piece targeted by engine's refutation capture first
   hangingPieceDetails = resolveRefutationHangingPiece(chessAfter, refutationPlayed, activeColor);
-  if (!hangingPieceDetails) {
+  if (!hangingPieceDetails && !refutationPlayed?.chess.isCheckmate()) {
     for (let r = 0; r < 8; r++) {
       for (let c = 0; c < 8; c++) {
         const piece = boardAfter[r][c];
@@ -555,7 +565,13 @@ export function extractTacticalContext(
         activeColor,
         movedPieceAfter.type
       );
-      const safeForks = findSafeForkTargets(chessAfter, movedObj.to, activeColor, opponentColor);
+      const safeForks = findSafeForkTargets(
+        chessAfter,
+        movedObj.to,
+        activeColor,
+        opponentColor,
+        attackedFromDest
+      );
       if (safeForks.length >= 2) {
         forkTargets.push(...safeForks);
         addTag("TACTICAL_FORK");

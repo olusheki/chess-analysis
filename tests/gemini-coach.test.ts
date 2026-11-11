@@ -1781,4 +1781,142 @@ describe("gemini-coach & explainability grounding", () => {
     expect(promptText).toContain("Bxd5");
     expect(promptText).toContain("Knight on d5");
   });
+
+  it("prioritizes checkmate headline on capture-mate blunders, avoids mid-sentence 'Your opponent', and formats exchange wins accurately", async () => {
+    for (const personaId of ["danny", "sage", "drillmaster"] as const) {
+      const mateBlunder = await coach.explainMove({
+        moveSan: "a6",
+        playedBy: "Black",
+        coachFor: "Black",
+        moveNumber: 3,
+        badge: "Blunder",
+        evalBefore: "+0.4",
+        evalAfter: "#1",
+        deltaWP: 48,
+        engineBestMove: "g6",
+        bestMovePV: ["g6"],
+        refutationPV: ["Qxf7#"],
+        personaId,
+        tacticalContext: makeContext({
+          tags: ["ALLOWS_MATE", "HANGING_PIECE"],
+          hangingPieceDetails: { square: "f7", piece: "Pawn", value: 1 },
+          allowedThreat: {
+            kind: "CHECKMATE",
+            refutationMoveSan: "Qxf7#",
+          },
+        }),
+      });
+      expect(mateBlunder.shortComment.toLowerCase()).toMatch(/checkmate|mate/);
+      expect(mateBlunder.shortComment).not.toContain("Pawn");
+      expect(mateBlunder.detailedExplanation).not.toMatch(/(?<!^|\. )Your opponent/);
+      expect(mateBlunder.detailedExplanation).toContain("your opponent");
+    }
+
+    const oppMateBlunder = await coach.explainMove({
+      moveSan: "a6",
+      playedBy: "Black",
+      coachFor: "White",
+      moveNumber: 3,
+      badge: "Blunder",
+      evalBefore: "+0.4",
+      evalAfter: "#1",
+      deltaWP: 48,
+      engineBestMove: "g6",
+      bestMovePV: ["g6"],
+      refutationPV: ["Qxf7#"],
+      tacticalContext: makeContext({
+        tags: ["ALLOWS_MATE"],
+        allowedThreat: {
+          kind: "CHECKMATE",
+          refutationMoveSan: "Qxf7#",
+        },
+      }),
+    });
+    expect(oppMateBlunder.detailedExplanation).toContain("to deliver checkmate (Qxf7#)");
+    expect(oppMateBlunder.detailedExplanation).not.toContain(
+      "walks into immediate checkmate with Qxf7#"
+    );
+    expect(oppMateBlunder.detailedExplanation).not.toMatch(/(?<!^|\. )Your opponent/);
+
+    const exchangeFenBefore = "4k3/2p5/3r4/8/2N5/8/8/4K3 w - - 0 15";
+    const cEx = new Chess(exchangeFenBefore);
+    cEx.move("Kf1");
+    const exchangeFenAfter = cEx.fen();
+    const exchangeRes = await coach.explainMove({
+      moveSan: "Kf1",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 15,
+      badge: "Miss",
+      evalBefore: "+3.2",
+      evalAfter: "0.0",
+      deltaWP: 30,
+      engineBestMove: "Nxd6+",
+      bestMovePV: ["Nxd6+"],
+      fenBefore: exchangeFenBefore,
+      fenAfter: exchangeFenAfter,
+      tacticalContext: makeContext({
+        tags: ["MISSED_CAPTURE"],
+        missedTactic: {
+          kind: "FREE_CAPTURE",
+          missedMoveSan: "Nxd6+",
+          targetSquares: ["d6"],
+          targetSummary: "Rook on d6",
+          netGain: 2,
+          isExchange: true,
+        },
+      }),
+    });
+    expect(exchangeRes.detailedExplanation).toContain("winning the exchange (Rook on d6)");
+    expect(exchangeRes.detailedExplanation).not.toContain("winning the Rook on d6");
+    expect(exchangeRes.detailedExplanation).not.toMatch(/(?<!^|\. )Your opponent/);
+    expect(validateExplanationGrounding(exchangeRes.detailedExplanation, exchangeFenAfter, exchangeFenBefore).valid).toBe(true);
+
+    // Opponent bestMoveReasoning should avoid player 'you' framing while keeping all 3 personas distinct
+    const oppReasons = await Promise.all(
+      (["danny", "sage", "drillmaster"] as const).map((personaId) =>
+        coach.explainMove({
+          moveSan: "a6",
+          playedBy: "Black",
+          coachFor: "White",
+          moveNumber: 3,
+          badge: "Blunder",
+          evalBefore: "+0.4",
+          evalAfter: "#1",
+          deltaWP: 48,
+          engineBestMove: "g6",
+          bestMovePV: ["g6", "Qf3"],
+          refutationPV: ["Qxf7#"],
+          personaId,
+          tacticalContext: makeContext({
+            tags: ["ALLOWS_MATE"],
+            allowedThreat: { kind: "CHECKMATE", refutationMoveSan: "Qxf7#" },
+          }),
+        })
+      )
+    );
+    const reasonTexts = oppReasons.map((r) => r.bestMoveReasoning ?? "");
+    expect(new Set(reasonTexts).size).toBe(3);
+    for (const reason of reasonTexts) {
+      expect(reason).not.toMatch(/\byou\b/i);
+      expect(reason).not.toMatch(/(?<!^|\. )Your opponent/);
+    }
+
+    const inaccRes = await coach.explainMove({
+      moveSan: "h3",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 12,
+      badge: "Inaccuracy",
+      evalBefore: "+1.1",
+      evalAfter: "+0.6",
+      deltaWP: 7,
+      engineBestMove: "d4",
+      bestMovePV: ["d4"],
+      refutationPV: ["Qxd4"],
+      tacticalContext: makeContext(),
+    });
+    expect(inaccRes.detailedExplanation).toContain("Watch for your opponent's");
+    expect(inaccRes.detailedExplanation).not.toMatch(/(?<!^|\. )Your opponent/);
+  });
 });
