@@ -603,4 +603,96 @@ describe("gemini-coach & explainability grounding", () => {
     expect(noEndgameStory.summary).toContain("Endgame N/A");
     expect(noEndgameStory.summary).not.toContain("Endgame 100%/100%");
   });
+
+  it("genuinely differentiates Danny, Sage, and Blaze across headlines, bestMoveReasoning, coachingTip, opponent slips, and storylines while surfacing comparative coachInsights", async () => {
+    const baseMistake = {
+      moveSan: "a3",
+      playedBy: "White" as const,
+      coachFor: "White" as const,
+      moveNumber: 4,
+      badge: "Mistake" as const,
+      evalBefore: "+0.4",
+      evalAfter: "-0.8",
+      deltaWP: 14.5,
+      engineBestMove: "Bb5",
+      bestMovePV: ["Bb5", "a6", "Bxc6"],
+      refutationPV: ["Bg4", "Be2"],
+      tacticalContext: makeContext(),
+      coachInsights: {
+        playedSan: "a3",
+        bestMoveSan: "Bb5",
+        whyBetterFacts: [
+          "Bb5 pins the Knight on c6 to the King.",
+          "Developing with Bb5 improves piece activity instead of spending a tempo on a flank pawn push (a3).",
+        ],
+        strategicTradeoffs: [
+          "Developing with Bb5 improves piece activity instead of spending a tempo on a flank pawn push (a3).",
+        ],
+        missedOpportunities: [
+          "Bb5 pins the Knight on c6 to the King.",
+        ],
+        bestPvIntentions: {
+          lineSan: ["Bb5", "a6", "Bxc6"],
+          checksDelivered: 0,
+          capturedTargets: [{ san: "Bxc6", piece: "Knight", square: "c6", byColor: "w" as const }],
+          castled: false,
+          promoted: false,
+          terminalCheckmate: false,
+          summaryFacts: ["Line targets material with Bxc6, winning the Knight on c6."],
+        },
+      },
+    };
+
+    const danny = await coach.explainMove({ ...baseMistake, personaId: "danny" });
+    const sage = await coach.explainMove({ ...baseMistake, personaId: "sage" });
+    const blaze = await coach.explainMove({ ...baseMistake, personaId: "drillmaster" });
+
+    // Headlines, detailed explanations, bestMoveReasoning, and coachingTip are all genuinely distinct per persona
+    expect(new Set([danny.shortComment, sage.shortComment, blaze.shortComment]).size).toBe(3);
+    expect(new Set([danny.detailedExplanation, sage.detailedExplanation, blaze.detailedExplanation]).size).toBe(3);
+    expect(new Set([danny.bestMoveReasoning, sage.bestMoveReasoning, blaze.bestMoveReasoning]).size).toBe(3);
+    expect(new Set([danny.coachingTip, sage.coachingTip, blaze.coachingTip]).size).toBe(3);
+
+    // Comparative chess "why" and PV future target intentions are explained clearly
+    expect(danny.detailedExplanation).toContain("pins the Knight on c6");
+    expect(danny.bestMoveReasoning).toContain("Knight on c6");
+    expect(sage.coachingTip?.toLowerCase()).toContain("pin");
+
+    // Opponent slips also reflect distinct coach personalities
+    const oppSlip = {
+      ...baseMistake,
+      playedBy: "Black" as const,
+      coachFor: "White" as const,
+      opponentName: "trocaderooo",
+      badge: "Blunder" as const,
+    };
+    const oppDanny = await coach.explainMove({ ...oppSlip, personaId: "danny" });
+    const oppSage = await coach.explainMove({ ...oppSlip, personaId: "sage" });
+    const oppBlaze = await coach.explainMove({ ...oppSlip, personaId: "drillmaster" });
+    expect(new Set([oppDanny.shortComment, oppSage.shortComment, oppBlaze.shortComment]).size).toBe(3);
+    expect(new Set([oppDanny.detailedExplanation, oppSage.detailedExplanation, oppBlaze.detailedExplanation]).size).toBe(3);
+
+    // Storylines differ across personas too
+    const baseStory = {
+      whiteName: "Alice",
+      blackName: "Bob",
+      result: "1-0",
+      openingName: "Ruy Lopez",
+      whiteAccuracy: 91.0,
+      blackAccuracy: 74.0,
+      whiteElo: 1800,
+      blackElo: 1450,
+      phaseAccuracies: {
+        opening: { white: 95, black: 82 },
+        middlegame: { white: 89, black: 70 },
+        endgame: { white: 92, black: 75 },
+      },
+      keyMomentCount: 3,
+    };
+    const sDanny = await coach.generateGameStoryline({ ...baseStory, personaId: "danny" });
+    const sSage = await coach.generateGameStoryline({ ...baseStory, personaId: "sage" });
+    const sBlaze = await coach.generateGameStoryline({ ...baseStory, personaId: "drillmaster" });
+    expect(new Set([sDanny.headline, sSage.headline, sBlaze.headline]).size).toBe(3);
+    expect(new Set([sDanny.whiteTakeaway, sSage.whiteTakeaway, sBlaze.whiteTakeaway]).size).toBe(3);
+  });
 });

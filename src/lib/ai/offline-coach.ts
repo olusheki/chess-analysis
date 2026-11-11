@@ -74,6 +74,111 @@ export interface GameStorylineResponse {
   coachMode?: "live" | "offline";
 }
 
+interface OfflinePersonaStyle {
+  id: CoachPersonaId;
+  errorClose: string;
+  praiseClose: string;
+  mistakeTip: string;
+  oppSlipTip: string;
+  blunderHeadline: (san: string, hanging?: { piece: string; square: string }) => string;
+  missHeadline: (best: string) => string;
+  mistakeHeadline: (san: string) => string;
+  inaccuracyHeadline: (san: string, best: string) => string;
+  brilliantHeadline: (san: string) => string;
+  greatHeadline: (san: string) => string;
+  bestHeadline: (san: string) => string;
+  bookHeadline: string;
+  forcedHeadline: (san: string) => string;
+  castleHeadline: string;
+  devHeadline: (san: string) => string;
+  oppSlipHeadline: (opp: string, san: string, badge: MoveBadge) => string;
+  oppStrongHeadline: (opp: string, san: string, badge: MoveBadge) => string;
+  bestReasonLead: (best: string, seq: string) => string;
+}
+
+const PERSONA_STYLES: Record<CoachPersonaId, OfflinePersonaStyle> = {
+  danny: {
+    id: "danny",
+    errorClose: "Take a breath—spot the tactical clue here and carry that scan into next turn.",
+    praiseClose: "Lovely intuition keeping your army active and working together!",
+    mistakeTip: "Before locking in a move, do a quick blunder check so every piece stays defended.",
+    oppSlipTip: "When your opponent stumbles, pause and check your forcing captures, checks, and threats.",
+    blunderHeadline: (san, h) =>
+      h
+        ? `Oops—${san} left your ${h.piece} on ${h.square} hanging!`
+        : `Careful! ${san} hits a snag and swings the game.`,
+    missHeadline: (best) => `Close! You had a big knockout with ${best}.`,
+    mistakeHeadline: (san) => `${san} lets a good portion of your edge slip away.`,
+    inaccuracyHeadline: (san, best) => `${san} works, though ${best} gave you a bit more zip.`,
+    brilliantHeadline: (san) => `${san}!! What a fireworks sacrifice—brilliant stuff!`,
+    greatHeadline: (san) => `${san}! Clutch calculation finding the lone winning resource!`,
+    bestHeadline: (san) => `${san} nails the engine's #1 choice!`,
+    bookHeadline: "Clean opening book move—right on track.",
+    forcedHeadline: (san) => `${san} was your only legal escape here.`,
+    castleHeadline: "Smart castling—tucking your king somewhere cozy.",
+    devHeadline: (san) => `Nice developing step with ${san}!`,
+    oppSlipHeadline: (opp, san, badge) =>
+      `${opp} ${badge === "Miss" ? "let you off the hook" : "slipped up"} with ${san}—time to pounce!`,
+    oppStrongHeadline: (opp, san, badge) =>
+      `${opp} stayed sharp with a ${badge.toLowerCase()} ${san}.`,
+    bestReasonLead: (best, seq) => `${best} would have kept you in great shape (${seq}).`,
+  },
+  sage: {
+    id: "sage",
+    errorClose: "Observe how this concession compromises key squares and long-term harmony.",
+    praiseClose: "Notice the classical coordination your pieces achieve around the central tension.",
+    mistakeTip: "Evaluate which square weakens or which piece lacks a constructive post before committing.",
+    oppSlipTip: "Examine the structural weaknesses your opponent just created and pivot smoothly toward them.",
+    blunderHeadline: (san, h) =>
+      h
+        ? `Structural collapse: ${san} drops the undefended ${h.piece} on ${h.square}.`
+        : `Positional crisis: ${san} severely compromises your evaluation.`,
+    missHeadline: (best) => `Strategic oversight: ${best} realized a decisive advantage.`,
+    mistakeHeadline: (san) => `Imbalance alert: ${san} surrenders lasting positional equity.`,
+    inaccuracyHeadline: (san, best) => `${san} loosens precision where ${best} held deeper harmony.`,
+    brilliantHeadline: (san) => `${san}!! A profound positional-tactical sacrifice transforming the board.`,
+    greatHeadline: (san) => `${san}! Classical accuracy—the solitary move preserving balance and pressure.`,
+    bestHeadline: (san) => `${san} aligns seamlessly with strategic truth.`,
+    bookHeadline: "Established opening theory—respecting central foundations.",
+    forcedHeadline: (san) => `Forced continuation: ${san} is uniquely legal.`,
+    castleHeadline: "Classical castling harmonizes rook connection and king safety.",
+    devHeadline: (san) => `Sound developing principle embodied by ${san}.`,
+    oppSlipHeadline: (opp, san, badge) =>
+      `${opp}'s ${san} is a ${badge.toLowerCase()} leaving concrete structural targets.`,
+    oppStrongHeadline: (opp, san, badge) =>
+      `${opp} maintains classical balance via ${badge.toLowerCase()} ${san}.`,
+    bestReasonLead: (best, seq) =>
+      `Strategically, ${best} preserves harmonious control along ${seq}.`,
+  },
+  drillmaster: {
+    id: "drillmaster",
+    errorClose: "Tighten calculation discipline: that concession hands over the initiative on the spot.",
+    praiseClose: "Clinical precision—zero tactical loopholes surrendered.",
+    mistakeTip: "Checklist every single ply: enemy checks first, enemy captures second, enemy threats third.",
+    oppSlipTip: "Lock on immediately! Calculate forcing checks and direct material strikes first.",
+    blunderHeadline: (san, h) =>
+      h
+        ? `Blunder! ${san} abandons your ${h.piece} on ${h.square} to immediate capture!`
+        : `Tactical breakdown! ${san} hands the initiative straight over.`,
+    missHeadline: (best) => `Missed knockout! ${best} crushed on the spot!`,
+    mistakeHeadline: (san) => `Costly slip! ${san} drops real pressure.`,
+    inaccuracyHeadline: (san, best) => `Too soft—${san} loses punch compared to ${best}.`,
+    brilliantHeadline: (san) => `${san}!! Ruthless sacrificial blow shattering the defense!`,
+    greatHeadline: (san) => `${san}! Dead-accurate clutch strike—only winning move on the board!`,
+    bestHeadline: (san) => `${san} hits maximum tactical efficiency!`,
+    bookHeadline: "Theory locked in—speed through to the fight.",
+    forcedHeadline: (san) => `Forced move: zero options other than ${san}.`,
+    castleHeadline: "Rapid castling secures the king and enters the rook into action.",
+    devHeadline: (san) => `Tempo-driven developing move: ${san}.`,
+    oppSlipHeadline: (opp, san, badge) =>
+      `Strike now! ${opp}'s ${san} (${badge.toLowerCase()}) opens a direct refutation!`,
+    oppStrongHeadline: (opp, san, badge) =>
+      `${opp} fired a ${badge.toLowerCase()} ${san}—calculate defenses immediately.`,
+    bestReasonLead: (best, seq) =>
+      `Calculation demands ${best} first—keeping tactical pressure via ${seq}.`,
+  },
+};
+
 export function formatLineSeq(
   lines?: string[],
   maxMoves = 4,
@@ -110,36 +215,8 @@ export function formatPhaseMetric(acc: number, count?: number): string {
   return count === 0 ? "N/A" : `${acc}%`;
 }
 
-function getOfflinePersonaVoice(personaId?: CoachPersonaId): {
-  errorClose: string;
-  praiseClose: string;
-  mistakeTip: string;
-  oppSlipTip: string;
-} {
-  switch (personaId) {
-    case "sage":
-      return {
-        errorClose: "Notice how this weakens key squares and piece harmony.",
-        praiseClose: "Your pieces coordinate cleanly around the central structure.",
-        mistakeTip: "Ask which piece lacks protection or role before advancing.",
-        oppSlipTip: "Pause to evaluate structural targets left behind by their slip.",
-      };
-    case "drillmaster":
-      return {
-        errorClose: "That tactical concession surrenders the initiative immediately.",
-        praiseClose: "Clinical precision — zero tactical loopholes left on the board.",
-        mistakeTip: "Scan checks, captures, and threats every single ply without exception.",
-        oppSlipTip: "Strike with forcing checks and captures while your opponent is uncoordinated.",
-      };
-    case "danny":
-    default:
-      return {
-        errorClose: "No worries — spot the tactical clue here and keep scanning next turn.",
-        praiseClose: "Great intuition keeping your army active and coordinated!",
-        mistakeTip: "Before moving, scan every piece to verify it stays defended.",
-        oppSlipTip: "When your opponent slips, pause to look for checks, captures, and threats.",
-      };
-  }
+function getStyle(personaId?: CoachPersonaId): OfflinePersonaStyle {
+  return PERSONA_STYLES[personaId ?? "danny"] ?? PERSONA_STYLES.danny;
 }
 
 export function describeTacticalFeatures(
@@ -184,30 +261,89 @@ export function describeTacticalFeatures(
   return parts.join(" ");
 }
 
+function pickComparativeReason(insights?: ComparativeCoachInsights): string {
+  if (!insights) return "";
+  const candidates = [
+    ...insights.missedOpportunities,
+    ...insights.strategicTradeoffs,
+  ].filter(Boolean);
+  if (candidates.length > 0) {
+    return candidates[0];
+  }
+  const pvFact = insights.bestPvIntentions?.summaryFacts?.[0];
+  return pvFact ?? "";
+}
+
+function pickTailoredTip(
+  insights: ComparativeCoachInsights | undefined,
+  fallbackTip: string,
+  style: OfflinePersonaStyle
+): string {
+  const joined = [
+    ...(insights?.missedOpportunities ?? []),
+    ...(insights?.strategicTradeoffs ?? []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (joined.includes("pin")) {
+    return style.id === "drillmaster"
+      ? "Rule of attack: always test bishop/rook alignments against their King and Queen!"
+      : style.id === "sage"
+      ? "Respect diagonal and file alignments—a hidden pin often freezes a key defender."
+      : "Keep an eye out for pieces lined up with the King—pins can win material fast!";
+  }
+  if (joined.includes("fork")) {
+    return style.id === "drillmaster"
+      ? "Calculate knight jumps and queen double attacks before settling for quiet retreats!"
+      : "Watch for loose enemy pieces resting on knight-fork or queen-fork geometry.";
+  }
+  if (joined.includes("develop") || joined.includes("mobiliz")) {
+    return style.id === "sage"
+      ? "Prioritize full piece mobilization before early castling or unforced flank pawn moves."
+      : "Get all your minor pieces off the back rank before starting side skirmishes!";
+  }
+  if (joined.includes("pawn structure") || joined.includes("isolated") || joined.includes("doubled")) {
+    return style.id === "sage"
+      ? "Concede structural pawn defects only when compensated by concrete open-file play."
+      : "Avoid splitting or doubling pawns unless tactical compensation forces it.";
+  }
+  return fallbackTip;
+}
+
 function buildOpponentMoveOfflineExplanation(
   req: CoachExplanationRequest,
   oppLabel: string,
   tacticalDetail: string,
   refutationSeq: string,
   bestSeq: string,
-  voice: ReturnType<typeof getOfflinePersonaVoice>
+  style: OfflinePersonaStyle
 ): CoachExplanationResponse {
-  const { badge, moveSan, engineBestMove } = req;
+  const { badge, moveSan, engineBestMove, coachInsights } = req;
+  const whyCompare = pickComparativeReason(coachInsights);
+  const pvFuture = coachInsights?.refutationPvIntentions?.summaryFacts?.[0] ?? "";
   const replyClause = refutationSeq
-    ? `Your best reply starts with ${refutationSeq}.`
+    ? style.id === "drillmaster"
+      ? `Execute the refutation immediately starting with ${refutationSeq}.`
+      : style.id === "sage"
+      ? `The cleanest principled response begins with ${refutationSeq}.`
+      : `Your best reply starts with ${refutationSeq}.`
     : "Look for checks, captures, and ways to seize the initiative.";
 
   if (badge === "Blunder" || badge === "Miss") {
     const targetNote = req.tacticalContext.hangingPieceDetails
       ? ` Their ${req.tacticalContext.hangingPieceDetails.piece} on ${req.tacticalContext.hangingPieceDetails.square} is exposed.`
       : "";
+    const bestReasoning = whyCompare
+      ? `${style.bestReasonLead(engineBestMove, bestSeq)} (${whyCompare})`
+      : style.bestReasonLead(engineBestMove, bestSeq);
     return {
       badge,
-      shortComment: `${oppLabel} ${badge === "Miss" ? "missed a chance" : "blundered"} with ${moveSan} — time to strike!`,
-      detailedExplanation: `${oppLabel}'s ${moveSan} shifted the evaluation (${req.evalBefore} to ${req.evalAfter}).${targetNote} ${tacticalDetail ? `${tacticalDetail} ` : ""}${replyClause}`,
-      bestMoveReasoning: `${engineBestMove} would have kept ${oppLabel} in the game (${bestSeq}).`,
+      shortComment: style.oppSlipHeadline(oppLabel, moveSan, badge),
+      detailedExplanation: `${oppLabel}'s ${moveSan} shifted the evaluation (${req.evalBefore} to ${req.evalAfter}).${targetNote} ${tacticalDetail ? `${tacticalDetail} ` : ""}${replyClause}${pvFuture ? ` ${pvFuture}` : ""}`.trim(),
+      bestMoveReasoning: bestReasoning,
       variationTitle: "Your Opportunity to Strike",
-      coachingTip: voice.oppSlipTip,
+      coachingTip: pickTailoredTip(coachInsights, style.oppSlipTip, style),
       coachMode: "offline",
     };
   }
@@ -215,11 +351,13 @@ function buildOpponentMoveOfflineExplanation(
   if (badge === "Mistake" || badge === "Inaccuracy") {
     return {
       badge,
-      shortComment: `${oppLabel} slipped with ${moveSan}; punish with active play.`,
-      detailedExplanation: `${oppLabel} conceded ${req.deltaWP.toFixed(1)}% win probability (${req.evalBefore} to ${req.evalAfter}) instead of ${engineBestMove}. ${tacticalDetail ? `${tacticalDetail} ` : ""}${replyClause}`,
-      bestMoveReasoning: `${engineBestMove} was stronger for ${oppLabel} (${bestSeq}).`,
+      shortComment: style.oppSlipHeadline(oppLabel, moveSan, badge),
+      detailedExplanation: `${oppLabel} conceded ${req.deltaWP.toFixed(1)}% win probability (${req.evalBefore} to ${req.evalAfter}) instead of ${engineBestMove}. ${tacticalDetail ? `${tacticalDetail} ` : ""}${replyClause}`.trim(),
+      bestMoveReasoning: whyCompare
+        ? `${engineBestMove} was stronger for ${oppLabel} (${bestSeq}): ${whyCompare}`
+        : `${engineBestMove} was stronger for ${oppLabel} (${bestSeq}).`,
       variationTitle: "Your Counterplay Plan",
-      coachingTip: voice.oppSlipTip,
+      coachingTip: pickTailoredTip(coachInsights, style.oppSlipTip, style),
       coachMode: "offline",
     };
   }
@@ -237,18 +375,13 @@ function buildOpponentMoveOfflineExplanation(
   }
 
   if (badge === "Brilliant" || badge === "Great" || badge === "Best") {
-    const strengthDesc =
-      badge === "Brilliant"
-        ? "sacrificed material soundly"
-        : badge === "Great"
-        ? "found the critical resource"
-        : "found the engine's top move";
+    const pvIntent = coachInsights?.bestPvIntentions?.summaryFacts?.[0] ?? "";
     return {
       badge,
-      shortComment: `${oppLabel} ${strengthDesc} with ${moveSan}.`,
-      detailedExplanation: `${oppLabel}'s ${moveSan} keeps strong pressure at ${req.evalAfter}. ${tacticalDetail ? `Watch out: ${tacticalDetail} ` : ""}${refutationSeq ? `Stay sharp and consider replying with ${refutationSeq}.` : "Prioritize king safety and defend your key squares."}`,
+      shortComment: style.oppStrongHeadline(oppLabel, moveSan, badge),
+      detailedExplanation: `${oppLabel}'s ${moveSan} maintains pressure at ${req.evalAfter}. ${tacticalDetail ? `Watch out: ${tacticalDetail} ` : ""}${pvIntent ? `${pvIntent} ` : ""}${refutationSeq ? `Stay alert and consider ${refutationSeq}.` : "Prioritize king safety and defend key squares."}`.trim(),
       variationTitle: "How to Defend & Counter",
-      coachingTip: voice.mistakeTip,
+      coachingTip: style.mistakeTip,
       coachMode: "offline",
     };
   }
@@ -262,10 +395,11 @@ function buildOpponentMoveOfflineExplanation(
 }
 
 /**
- * Generates deterministic offline game recap grounded in CAPS2 phase metrics.
+ * Generates deterministic offline game recap grounded in CAPS2 phase metrics & persona voice.
  */
 export function buildOfflineGameStoryline(req: GameStorylineRequest): GameStorylineResponse {
   const openingLabel = req.openingName || "the opening";
+  const style = getStyle(req.personaId);
   const counts = req.phaseMoveCounts;
   const openW = formatPhaseMetric(req.phaseAccuracies.opening.white, counts?.opening.white);
   const openB = formatPhaseMetric(req.phaseAccuracies.opening.black, counts?.opening.black);
@@ -276,29 +410,68 @@ export function buildOfflineGameStoryline(req: GameStorylineRequest): GameStoryl
     ? "Endgame N/A"
     : `Endgame ${formatPhaseMetric(req.phaseAccuracies.endgame.white, counts?.endgame.white)}/${formatPhaseMetric(req.phaseAccuracies.endgame.black, counts?.endgame.black)}`;
 
-  const headline =
-    req.result === "1-0"
-      ? `${req.whiteName} takes the victory with ${req.whiteAccuracy}% accuracy`
-      : req.result === "0-1"
-      ? `${req.blackName} takes the victory with ${req.blackAccuracy}% accuracy`
-      : req.result === "1/2-1/2"
-      ? `Hard-fought draw in ${openingLabel}`
-      : `Balanced battle in ${openingLabel} (${req.whiteAccuracy}% vs ${req.blackAccuracy}%)`;
+  const headline = (() => {
+    if (req.result === "1-0") {
+      return style.id === "drillmaster"
+        ? `${req.whiteName} closes the knock-out (${req.whiteAccuracy}% CAPS2)!`
+        : style.id === "sage"
+        ? `${req.whiteName} prevails through superior harmony (${req.whiteAccuracy}% CAPS2)`
+        : `${req.whiteName} takes the victory with ${req.whiteAccuracy}% accuracy`;
+    }
+    if (req.result === "0-1") {
+      return style.id === "drillmaster"
+        ? `${req.blackName} converts ruthlessly (${req.blackAccuracy}% CAPS2)!`
+        : style.id === "sage"
+        ? `${req.blackName} commands the strategic arc (${req.blackAccuracy}% CAPS2)`
+        : `${req.blackName} takes the victory with ${req.blackAccuracy}% accuracy`;
+    }
+    if (req.result === "1/2-1/2") {
+      return style.id === "drillmaster"
+        ? `Tactical stalemate: deadlocked battle in ${openingLabel}`
+        : style.id === "sage"
+        ? `Equilibrium preserved in ${openingLabel}`
+        : `Hard-fought draw in ${openingLabel}`;
+    }
+    return `Balanced battle in ${openingLabel} (${req.whiteAccuracy}% vs ${req.blackAccuracy}%)`;
+  })();
 
   const turningNote = req.turningPointMove
     ? ` The critical turning point came around ${req.turningPointMove}.`
     : "";
 
-  const summary = `In ${openingLabel}, White (${req.whiteName}) posted ${req.whiteAccuracy}% overall CAPS2 accuracy (est. ${req.whiteElo}) against Black (${req.blackName}) at ${req.blackAccuracy}% (est. ${req.blackElo}). Phase accuracy (W/B): Opening ${openW}/${openB}, Middlegame ${midW}/${midB}, ${endgameClause}.${turningNote}`;
+  const leadPrefix =
+    style.id === "drillmaster"
+      ? `Combat log — ${openingLabel}:`
+      : style.id === "sage"
+      ? `Strategic review — ${openingLabel}:`
+      : `In ${openingLabel},`;
+
+  const summary = `${leadPrefix} White (${req.whiteName}) posted ${req.whiteAccuracy}% overall CAPS2 accuracy (est. ${req.whiteElo}) against Black (${req.blackName}) at ${req.blackAccuracy}% (est. ${req.blackElo}). Phase accuracy (W/B): Opening ${openW}/${openB}, Middlegame ${midW}/${midB}, ${endgameClause}.${turningNote}`;
 
   const whiteTakeaway =
     req.whiteAccuracy >= 85
-      ? `Strong calculation throughout (${req.whiteAccuracy}% accuracy); keep reviewing the ${req.keyMomentCount} key moments to sharpen conversions.`
+      ? style.id === "drillmaster"
+        ? `Sharp execution (${req.whiteAccuracy}%)—review the ${req.keyMomentCount} critical moments to hunt even faster mates.`
+        : style.id === "sage"
+        ? `Admirable structural discipline (${req.whiteAccuracy}%); study the ${req.keyMomentCount} inflections to deepen endgame technique.`
+        : `Strong calculation throughout (${req.whiteAccuracy}% accuracy); keep reviewing the ${req.keyMomentCount} key moments to sharpen conversions.`
+      : style.id === "drillmaster"
+      ? `Middlegame discipline needs work (${midW}): stop leaving loose pieces undefended during tactical handoffs.`
+      : style.id === "sage"
+      ? `Center and piece harmony wavered in the middlegame (${midW}); verify weak squares before advancing pawns.`
       : `Focus on double-checking undefended pieces before committing in complex middlegame positions (${midW} middlegame accuracy).`;
 
   const blackTakeaway =
     req.blackAccuracy >= 85
-      ? `Resilient accuracy (${req.blackAccuracy}%); look closely at the turning points where small concessions shifted momentum.`
+      ? style.id === "drillmaster"
+        ? `Relentless defensive precision (${req.blackAccuracy}%)—drill the turning points to turn equal spots into wins.`
+        : style.id === "sage"
+        ? `Composed classical defense (${req.blackAccuracy}%); inspect where initiative briefly drifted.`
+        : `Resilient accuracy (${req.blackAccuracy}%); look closely at the turning points where small concessions shifted momentum.`
+      : style.id === "drillmaster"
+      ? `Spot opponent threats faster (${midB} middlegame): force checks and captures before defending passively.`
+      : style.id === "sage"
+      ? `Middlegame tension (${midB}) tested piece coordination; keep knights and bishops anchored cleanly.`
       : `Review the tactical key moments in the middlegame (${midB} accuracy) to spot counterplay sooner.`;
 
   return {
@@ -311,14 +484,15 @@ export function buildOfflineGameStoryline(req: GameStorylineRequest): GameStoryl
 }
 
 /**
- * Generates deterministic offline coach feedback grounded in tactical tags, evaluation deltas, PV lines, persona voice, and coachFor perspective.
+ * Generates deterministic offline coach feedback grounded in tactical tags,
+ * comparative chess reasons, PV future intentions, persona style, and perspective.
  */
 export function buildOfflineMoveExplanation(req: CoachExplanationRequest): CoachExplanationResponse {
-  const { badge, tacticalContext, engineBestMove, moveSan, playedBy } = req;
+  const { badge, tacticalContext, engineBestMove, moveSan, playedBy, coachInsights } = req;
   const perspective = req.coachFor ?? playedBy;
   const isPlayerMove = playedBy === perspective;
   const oppLabel = req.opponentName || "Your opponent";
-  const voice = getOfflinePersonaVoice(req.personaId);
+  const style = getStyle(req.personaId);
   const suppressPositivePraise = badge === "Blunder" || badge === "Miss";
   const suppressCenterTag = suppressPositivePraise || badge === "Mistake" || badge === "Inaccuracy";
   const tacticalDetail = describeTacticalFeatures(
@@ -329,7 +503,7 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   const playedTurn: "w" | "b" = playedBy === "Black" ? "b" : "w";
   const replyTurn: "w" | "b" = playedTurn === "w" ? "b" : "w";
   const replyMoveNumber =
-    req.moveNumber !== undefined
+    typeof req.moveNumber === "number" && Number.isFinite(req.moveNumber)
       ? playedTurn === "b"
         ? req.moveNumber + 1
         : req.moveNumber
@@ -344,9 +518,13 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
       tacticalDetail,
       refutationSeq,
       bestSeq,
-      voice
+      style
     );
   }
+
+  const comparativeReason = pickComparativeReason(coachInsights);
+  const futureBestFact = coachInsights?.bestPvIntentions?.summaryFacts?.[0] ?? "";
+  const futureRefutationFact = coachInsights?.refutationPvIntentions?.summaryFacts?.[0] ?? "";
 
   if (badge === "Blunder") {
     if (tacticalContext.hangingPieceDetails) {
@@ -356,11 +534,11 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
         : `${oppLabel} can exploit this immediately, shifting the evaluation to ${req.evalAfter}.`;
       return {
         badge,
-        shortComment: `You left your ${piece} on ${square} hanging!`,
-        detailedExplanation: `${moveSan} left your ${piece} vulnerable on ${square}. ${punishClause} ${voice.errorClose}`,
-        bestMoveReasoning: `${engineBestMove} would have kept your position solid (${bestSeq}).`,
+        shortComment: style.blunderHeadline(moveSan, { piece, square }),
+        detailedExplanation: `${moveSan} left your ${piece} vulnerable on ${square}. ${punishClause} ${comparativeReason ? `Why ${engineBestMove} outperformed: ${comparativeReason} ` : ""}${style.errorClose}`.trim(),
+        bestMoveReasoning: `${style.bestReasonLead(engineBestMove, bestSeq)}${futureBestFact ? ` ${futureBestFact}` : ""}`,
         variationTitle: `${oppLabel}'s Winning Punishment`,
-        coachingTip: voice.mistakeTip,
+        coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),
         coachMode: "offline",
       };
     }
@@ -369,11 +547,11 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
       : `${oppLabel} now holds a decisive tactical continuation.`;
     return {
       badge,
-      shortComment: `${moveSan} is a critical blunder that shifts the game.`,
-      detailedExplanation: `This move concedes decisive momentum (${req.evalBefore} to ${req.evalAfter}). ${tacticalDetail || lineClause} ${voice.errorClose}`,
-      bestMoveReasoning: `${engineBestMove} was the strongest defense (${bestSeq}).`,
+      shortComment: style.blunderHeadline(moveSan),
+      detailedExplanation: `This move concedes decisive momentum (${req.evalBefore} to ${req.evalAfter}). ${tacticalDetail || lineClause} ${futureRefutationFact ? `${futureRefutationFact} ` : ""}${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
+      bestMoveReasoning: `${style.bestReasonLead(engineBestMove, bestSeq)}${futureBestFact ? ` ${futureBestFact}` : ""}`,
       variationTitle: "Punishment Line",
-      coachingTip: voice.mistakeTip,
+      coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),
       coachMode: "offline",
     };
   }
@@ -381,11 +559,11 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (badge === "Miss") {
     return {
       badge,
-      shortComment: `You missed a winning chance with ${engineBestMove}!`,
-      detailedExplanation: `${oppLabel} had just slipped, but ${moveSan} let them off the hook (${req.evalBefore} to ${req.evalAfter}). ${tacticalDetail || `Better was ${bestSeq}.`} ${voice.errorClose}`.trim(),
-      bestMoveReasoning: `${engineBestMove} would have seized a commanding advantage immediately.`,
+      shortComment: style.missHeadline(engineBestMove),
+      detailedExplanation: `${oppLabel} had just slipped, but ${moveSan} let them off the hook (${req.evalBefore} to ${req.evalAfter}). ${comparativeReason || tacticalDetail || `Better was ${bestSeq}.`} ${style.errorClose}`.trim(),
+      bestMoveReasoning: `${engineBestMove} seized a commanding edge along ${bestSeq}${futureBestFact ? ` — ${futureBestFact}` : "."}`,
       variationTitle: "Missed Winning Line",
-      coachingTip: voice.oppSlipTip,
+      coachingTip: pickTailoredTip(coachInsights, style.oppSlipTip, style),
       coachMode: "offline",
     };
   }
@@ -394,11 +572,11 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
     const punishNote = refutationSeq ? ` ${oppLabel} can press with ${refutationSeq}.` : "";
     return {
       badge,
-      shortComment: `${moveSan} gives away a meaningful advantage.`,
-      detailedExplanation: `${tacticalContext.hangingPieceDetails ? `Your ${tacticalContext.hangingPieceDetails.piece} on ${tacticalContext.hangingPieceDetails.square} becomes vulnerable. ` : ""}The evaluation shifted from ${req.evalBefore} to ${req.evalAfter}.${punishNote} ${voice.errorClose}`,
-      bestMoveReasoning: `${engineBestMove} maintained stronger control (${bestSeq}).`,
+      shortComment: style.mistakeHeadline(moveSan),
+      detailedExplanation: `${tacticalContext.hangingPieceDetails ? `Your ${tacticalContext.hangingPieceDetails.piece} on ${tacticalContext.hangingPieceDetails.square} becomes vulnerable. ` : ""}The evaluation shifted from ${req.evalBefore} to ${req.evalAfter}.${punishNote} ${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
+      bestMoveReasoning: `${style.bestReasonLead(engineBestMove, bestSeq)}${futureBestFact ? ` ${futureBestFact}` : ""}`,
       variationTitle: "Optimal Continuation",
-      coachingTip: voice.mistakeTip,
+      coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),
       coachMode: "offline",
     };
   }
@@ -406,10 +584,11 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (badge === "Inaccuracy") {
     return {
       badge,
-      shortComment: `${moveSan} is slightly imprecise; ${engineBestMove} was sharper.`,
-      detailedExplanation: `While ${moveSan} remains playable, it concedes a small edge (${req.evalBefore} to ${req.evalAfter}). ${tacticalDetail || (refutationSeq ? `Watch out for ${oppLabel}'s ${refutationSeq}.` : "")} ${voice.errorClose}`.trim(),
-      bestMoveReasoning: `${engineBestMove} kept more active pressure (${bestSeq}).`,
+      shortComment: style.inaccuracyHeadline(moveSan, engineBestMove),
+      detailedExplanation: `While ${moveSan} stays playable, it trims your edge (${req.evalBefore} to ${req.evalAfter}). ${comparativeReason || tacticalDetail || (refutationSeq ? `Watch for ${oppLabel}'s ${refutationSeq}.` : "")} ${style.errorClose}`.trim(),
+      bestMoveReasoning: `${style.bestReasonLead(engineBestMove, bestSeq)}${futureBestFact ? ` ${futureBestFact}` : ""}`,
       variationTitle: "More Accurate Path",
+      coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),
       coachMode: "offline",
     };
   }
@@ -417,10 +596,13 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (badge === "Brilliant") {
     return {
       badge,
-      shortComment: `${moveSan}!! A brilliant sacrifice that breaks the position open!`,
-      detailedExplanation: `You sacrifice material with ${moveSan} while keeping control at ${req.evalAfter}. ${tacticalDetail || "Your piece activity and king pressure deliver full compensation."} ${voice.praiseClose}`,
+      shortComment: style.brilliantHeadline(moveSan),
+      detailedExplanation: `You sacrifice material with ${moveSan} while holding decisive control at ${req.evalAfter}. ${tacticalDetail || "Your active pieces and king attack create unstoppable compensation."} ${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim(),
       variationTitle: "Brilliant Continuation",
-      coachingTip: "Calculated sacrifices shine when your pieces quickly swarm the opponent's king.",
+      coachingTip:
+        style.id === "drillmaster"
+          ? "Shatter the shelter first—calculate follow-up checks before sacrificing!"
+          : "Calculated sacrifices work best when every piece enters the attack with tempo.",
       coachMode: "offline",
     };
   }
@@ -428,9 +610,10 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (badge === "Great") {
     return {
       badge,
-      shortComment: `${moveSan}! You found the only winning move in a sharp spot.`,
-      detailedExplanation: `In a critical position, ${moveSan} was your sole path to keep the edge (${req.evalAfter}). ${tacticalDetail || voice.praiseClose}`.trim(),
+      shortComment: style.greatHeadline(moveSan),
+      detailedExplanation: `In a razor-sharp position, ${moveSan} was the solitary resource holding the edge (${req.evalAfter}). ${tacticalDetail ? `${tacticalDetail} ` : ""}${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim(),
       variationTitle: "Sole Winning Line",
+      coachingTip: style.praiseClose,
       coachMode: "offline",
     };
   }
@@ -438,11 +621,12 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (badge === "Best") {
     return {
       badge,
-      shortComment: `${moveSan} is the best move on the board!`,
+      shortComment: style.bestHeadline(moveSan),
       detailedExplanation: tacticalDetail
-        ? `${tacticalDetail} You found the engine's top continuation at ${req.evalAfter}. ${voice.praiseClose}`
-        : `You found the engine's sharpest line (${bestSeq}), maximizing piece activity at ${req.evalAfter}. ${voice.praiseClose}`,
+        ? `${tacticalDetail} You matched the engine's top line at ${req.evalAfter}. ${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim()
+        : `You matched Stockfish's sharpest idea (${bestSeq}), keeping initiative at ${req.evalAfter}. ${futureBestFact ? `${futureBestFact} ` : ""}${style.praiseClose}`.trim(),
       variationTitle: "Engine Line",
+      coachingTip: futureBestFact || style.praiseClose,
       coachMode: "offline",
     };
   }
@@ -450,8 +634,8 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (badge === "Book") {
     return {
       badge,
-      shortComment: "Standard opening book theory.",
-      detailedExplanation: `Following established theory in the ${req.openingName || "opening"}, fighting cleanly for central space and development.`,
+      shortComment: style.bookHeadline,
+      detailedExplanation: `Following established theory in the ${req.openingName || "opening"}, staking central space and smooth development.`,
       coachMode: "offline",
     };
   }
@@ -459,8 +643,8 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (badge === "Forced") {
     return {
       badge,
-      shortComment: `${moveSan} was your only legal move.`,
-      detailedExplanation: "There were no legal alternatives available in this position.",
+      shortComment: style.forcedHeadline(moveSan),
+      detailedExplanation: "No legal alternatives existed in this position.",
       coachMode: "offline",
     };
   }
@@ -468,8 +652,8 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (tacticalContext.tags.includes("KING_SAFETY_CASTLE")) {
     return {
       badge,
-      shortComment: "Castling tucks your king away safely.",
-      detailedExplanation: `A timely ${badge.toLowerCase()} move that safeguards your king and activates the rook. ${voice.praiseClose}`,
+      shortComment: style.castleHeadline,
+      detailedExplanation: `A timely ${badge.toLowerCase()} move tucking the king safely and bringing the rook toward central files. ${style.praiseClose}`,
       coachMode: "offline",
     };
   }
@@ -477,18 +661,18 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
   if (tacticalContext.tags.includes("DEVELOPMENT")) {
     return {
       badge,
-      shortComment: "A solid developing move.",
-      detailedExplanation: `You develop a minor piece toward active central squares (${tacticalDetail || "preparing castling and harmonious coordination"}). ${voice.praiseClose}`,
+      shortComment: style.devHeadline(moveSan),
+      detailedExplanation: `You bring a minor piece toward active central squares (${tacticalDetail || "harmonizing development and preparing castling"}). ${style.praiseClose}`,
       coachMode: "offline",
     };
   }
 
   return {
     badge,
-    shortComment: `${moveSan} is a ${badge.toLowerCase()} move.`,
-    detailedExplanation: `${tacticalDetail ? `${tacticalDetail} ` : `A reasonable continuation keeping the evaluation at ${req.evalAfter}. `}${engineBestMove !== moveSan ? `${engineBestMove} was slightly sharper. ` : ""}${voice.praiseClose}`.trim(),
+    shortComment: `${moveSan} is a ${badge.toLowerCase()} choice.`,
+    detailedExplanation: `${tacticalDetail ? `${tacticalDetail} ` : `A solid continuation holding ${req.evalAfter}. `}${comparativeReason ? `${comparativeReason} ` : engineBestMove !== moveSan ? `${engineBestMove} offered slightly more punch. ` : ""}${style.praiseClose}`.trim(),
     bestMoveReasoning:
-      engineBestMove !== moveSan ? `${engineBestMove} offered a touch more precision (${bestSeq}).` : undefined,
+      engineBestMove !== moveSan ? style.bestReasonLead(engineBestMove, bestSeq) : undefined,
     coachMode: "offline",
   };
 }
