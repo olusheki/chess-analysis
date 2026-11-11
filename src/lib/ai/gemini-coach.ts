@@ -82,7 +82,12 @@ function formatLineSeq(
 ): string {
   if (!lines || lines.length === 0) return "";
   const slice = lines.slice(0, maxMoves);
-  if (startMoveNumber === undefined || !startColor) {
+  if (
+    typeof startMoveNumber !== "number" ||
+    !Number.isFinite(startMoveNumber) ||
+    startMoveNumber <= 0 ||
+    !startColor
+  ) {
     return slice.join(" ");
   }
   const tokens: string[] = [];

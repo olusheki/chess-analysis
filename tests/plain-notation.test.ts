@@ -83,6 +83,12 @@ describe("plain-notation converter & coach prose substitution", () => {
       expect(formatCoachProse("White scored 87.6% CAPS2 in PV1 (+M3) against user_b4.")).toBe(
         "White scored 87.6% CAPS2 in PV1 (mate in 3) against user_b4."
       );
+      expect(formatCoachProse("Eval shifted to -M2, while PV1 found M3.")).toBe(
+        "Eval shifted to mate for Black in 2, while PV1 found mate in 3."
+      );
+      expect(formatCoachProse("Play Nf3 before d4.")).toBe(
+        "Play knight f3 before pawn d4."
+      );
     });
   });
 });

@@ -128,7 +128,13 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       retryState: INITIAL_RETRY_STATE,
     }),
 
-  setCoachColor: (coachColor) => set({ coachColor, explanations: {}, storyline: null }),
+  setCoachColor: (coachColor) =>
+    set({
+      coachColor,
+      explanations: {},
+      storyline: null,
+      retryState: INITIAL_RETRY_STATE,
+    }),
 
   setPersonaId: (personaId) => set({ personaId, explanations: {}, storyline: null }),
 

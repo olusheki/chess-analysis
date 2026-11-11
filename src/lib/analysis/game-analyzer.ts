@@ -130,11 +130,36 @@ function formatPgnClock(comment?: string): string | undefined {
   if (!match) return undefined;
   const raw = match[1];
   const parts = raw.split(":");
-  if (parts.length === 3 && parts[0] === "0") {
+  if (parts.length === 3 && Number.parseInt(parts[0], 10) === 0) {
     const mins = String(Number.parseInt(parts[1], 10));
     return `${mins}:${parts[2]}`;
   }
   return raw;
+}
+
+/**
+ * Formats seconds-only PGN TimeControl headers (e.g. "600", "600+5") into a starting clock display.
+ * Ignores Daily ("1/86400") and multi-stage ("40/7200") formats where base-seconds parsing is invalid.
+ */
+export function parseBaseClockFromHeader(timeControl?: string): string | undefined {
+  if (!timeControl) return undefined;
+  const trimmed = timeControl.trim();
+  if (!/^\d+(?:\+\d+)?$/.test(trimmed)) return undefined;
+  const baseSec = Number.parseInt(trimmed.split("+")[0], 10);
+  if (!Number.isFinite(baseSec) || baseSec <= 0) return undefined;
+  const hrs = Math.floor(baseSec / 3600);
+  const mins = Math.floor((baseSec % 3600) / 60);
+  const secs = baseSec % 60;
+  const secStr = String(secs).padStart(2, "0");
+  if (hrs > 0) return `${hrs}:${String(mins).padStart(2, "0")}:${secStr}`;
+  return `${mins}:${secStr}`;
+}
+
+/**
+ * Returns the side to move ("w" or "b") directly from a FEN string.
+ */
+export function getFenTurn(fen?: string): "w" | "b" {
+  return fen?.split(/\s+/)[1] === "b" ? "b" : "w";
 }
 
 /**

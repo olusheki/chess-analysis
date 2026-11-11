@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { Chess } from "chess.js";
-import { analyzeGame, parsePgnGame } from "@/lib/analysis/game-analyzer";
+import {
+  analyzeGame,
+  getFenTurn,
+  parseBaseClockFromHeader,
+  parsePgnGame,
+} from "@/lib/analysis/game-analyzer";
 import type { ChessEngine, PositionEval } from "@/lib/engine/engine-evaluator";
 
 const KASPAROV_TOPALOV_1999_PGN = `[Event "Hoogovens"]
@@ -466,12 +471,19 @@ describe("game-analyzer (full Tier 1 + Tier 2 pipeline)", () => {
     expect(moveBxd8.classification.badge).toBe("Best");
   });
 
-  it("extracts [%clk ...] timestamps from PGN comments cleanly on parsed moves", () => {
+  it("extracts [%clk ...] timestamps (including 00:xx:yy) and parses seconds-only TimeControl headers cleanly", () => {
     const timedPgn = `[Event "Live Chess"]
 [TimeControl "600"]
 
-1. e4 {[%clk 0:09:58.7]} 1... e5 {[%clk 0:10:00]} 2. Nf3 {[%clk 0:09:55.1]} 2... Nf6 {[%clk 0:00:12.4]} 1-0`;
+1. e4 {[%clk 00:09:58.7]} 1... e5 {[%clk 0:10:00]} 2. Nf3 {[%clk 00:09:55.1]} 2... Nf6 {[%clk 0:00:12.4]} 1-0`;
     const parsed = parsePgnGame(timedPgn);
     expect(parsed.moves.map((m) => m.clock)).toEqual(["9:58.7", "10:00", "9:55.1", "0:12.4"]);
+
+    expect(parseBaseClockFromHeader("600")).toBe("10:00");
+    expect(parseBaseClockFromHeader("600+5")).toBe("10:00");
+    expect(parseBaseClockFromHeader("1/86400")).toBeUndefined();
+    expect(parseBaseClockFromHeader("40/7200")).toBeUndefined();
+    expect(getFenTurn("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1")).toBe("b");
+    expect(getFenTurn("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")).toBe("w");
   });
 });

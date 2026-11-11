@@ -311,8 +311,11 @@ describe("useReviewStore (Zustand reactive review state)", () => {
     expect(useReviewStore.getState().explanations).toEqual({});
     expect(useReviewStore.getState().storyline).toBeNull();
 
-    // Switching coachColor defaults to white, switches cleanly, and clears cached commentary
+    // Switching coachColor defaults to white, switches cleanly, and clears cached commentary + stale retry/punish state
     expect(useReviewStore.getState().coachColor).toBe("white");
+    store.jumpToPly(4);
+    store.startRetryMode();
+    expect(useReviewStore.getState().retryState.active).toBe(true);
     store.setExplanation(4, {
       badge: "Blunder",
       shortComment: "Blunder!",
@@ -322,6 +325,8 @@ describe("useReviewStore (Zustand reactive review state)", () => {
     expect(useReviewStore.getState().coachColor).toBe("black");
     expect(useReviewStore.getState().explanations).toEqual({});
     expect(useReviewStore.getState().storyline).toBeNull();
+    expect(useReviewStore.getState().retryState.active).toBe(false);
+    expect(useReviewStore.getState().retryState.status).toBe("idle");
 
     // Navigation bounds
     store.jumpToPly(-5);

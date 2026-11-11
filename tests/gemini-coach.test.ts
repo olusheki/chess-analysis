@@ -331,6 +331,23 @@ describe("gemini-coach & explainability grounding", () => {
     expect(blunderNoPraise.detailedExplanation).toContain("6...dxe5 7. Bb5");
     expect(blunderNoPraise.bestMoveReasoning).toContain("6. O-O O-O 7. Bg5");
 
+    // Null / invalid runtime moveNumber never leaks "null." into line formatting
+    const nullMoveNumRes = await coach.explainMove({
+      moveSan: "Ne5",
+      playedBy: "White",
+      moveNumber: null as unknown as number,
+      badge: "Blunder",
+      evalBefore: "+0.2",
+      evalAfter: "-2.8",
+      deltaWP: 42,
+      engineBestMove: "O-O",
+      bestMovePV: ["O-O", "O-O"],
+      refutationPV: ["dxe5", "Bb5"],
+      tacticalContext: makeContext({ tags: [] }),
+    });
+    expect(nullMoveNumRes.detailedExplanation).not.toContain("null.");
+    expect(nullMoveNumRes.bestMoveReasoning).not.toContain("null.");
+
     for (const badge of [
       "Book",
       "Great",

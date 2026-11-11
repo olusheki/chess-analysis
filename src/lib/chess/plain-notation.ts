@@ -31,7 +31,7 @@ function isSentenceBoundary(before: string): boolean {
 }
 
 const SQUARE_CONTEXT_RE =
-  /\b(?:on|at|to|from|in|into|onto|toward|towards|near|via|over|across|along|around|past|between|beyond|behind|before|through|squares?|targets?|targeting|controls?|controlling|controlled|defends?|defending|defended|attacks?|attacking|attacked|protects?|protecting|protected|guards?|guarding|guarded|occupies|occupy|occupying|diagonal|diagonals|files?|ranks?|corner|outpost|weakness|weaknesses)\s+$/i;
+  /\b(?:on|at|to|from|in|into|onto|toward|towards|near|via|over|across|along|around|past|between|beyond|behind|through|squares?|targets?|targeting|controls?|controlling|controlled|defends?|defending|defended|attacks?|attacking|attacked|protects?|protecting|protected|guards?|guarding|guarded|occupies|occupy|occupying|diagonal|diagonals|files?|ranks?|corner|outpost|weakness|weaknesses)\s+$/i;
 
 const CONTINUATION_CONJ_RE = /(?:,\s*|\b(?:and|or)\s+)$/i;
 
@@ -143,9 +143,9 @@ export function formatNotationPair(san: string, plainEnglish: boolean): string {
   return `${plain} (${san})`;
 }
 
-// Single-pass token pattern matching SAN, long SAN, UCI coordinate moves, and mate tags (+M3 / -M2).
+// Single-pass token pattern matching SAN, long SAN, UCI coordinate moves, and mate tags (+M3 / -M2 / M3).
 const PROSE_NOTATION_RE =
-  /(?<![A-Za-z0-9_-])(?:(?:O-O-O|O-O|0-0-0|0-0)[+#]?(?:!!|\?\?|!\?|\?!)?|[+-]M[1-9][0-9]*|[KQRBN](?:[a-h][1-8]|[a-h]|[1-8])?[-x]?[a-h][1-8][+#]?(?:!!|\?\?|!\?|\?!)?|[a-h]x[a-h][1-8](?:=[QRBN])?(?:\s+e\.p\.)?[+#]?(?:!!|\?\?|!\?|\?!)?|[a-h][1-8]-?[a-h][1-8][qrbnQRBN]?[+#]?|[a-h][1-8](?:=[QRBN])?[+#]?(?:!!|\?\?|!\?|\?!)?)(?![A-Za-z0-9_=-])/g;
+  /(?<![A-Za-z0-9_-])(?:(?:O-O-O|O-O|0-0-0|0-0)[+#]?(?:!!|\?\?|!\?|\?!)?|[+-]?M[1-9][0-9]*|[KQRBN](?:[a-h][1-8]|[a-h]|[1-8])?[-x]?[a-h][1-8][+#]?(?:!!|\?\?|!\?|\?!)?|[a-h]x[a-h][1-8](?:=[QRBN])?(?:\s+e\.p\.)?[+#]?(?:!!|\?\?|!\?|\?!)?|[a-h][1-8]-?[a-h][1-8][qrbnQRBN]?[+#]?|[a-h][1-8](?:=[QRBN])?[+#]?(?:!!|\?\?|!\?|\?!)?)(?![A-Za-z0-9_=-])/g;
 
 /**
  * Replaces chess notation tokens within natural-language Coach prose with plain English.
@@ -166,10 +166,14 @@ export function formatCoachProse(text: string): string {
     const start = match.index;
     const gap = text.slice(lastIndex, start);
 
-    // Handle mate tag (+M3 / -M2) cleanly
-    const mateMatch = /^([+-])M([1-9][0-9]*)$/.exec(raw);
+    // Handle mate tag (+M3 / -M2 / M3) cleanly without inverting -M#
+    const mateMatch = /^([+-]?)M([1-9][0-9]*)$/.exec(raw);
     if (mateMatch) {
-      out += gap + `mate in ${mateMatch[2]}`;
+      const mateText =
+        mateMatch[1] === "-"
+          ? `mate for Black in ${mateMatch[2]}`
+          : `mate in ${mateMatch[2]}`;
+      out += gap + mateText;
       lastIndex = start + raw.length;
       lastTokenKind = null;
       continue;
