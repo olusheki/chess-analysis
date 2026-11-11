@@ -35,7 +35,7 @@ export interface TacticalContext {
   gamePhase: "Opening" | "Middlegame" | "Endgame";
 }
 
-const PIECE_VALUES: Record<PieceSymbol, number> = {
+export const PIECE_VALUES: Record<PieceSymbol, number> = {
   p: 1,
   n: 3,
   b: 3,
@@ -44,7 +44,7 @@ const PIECE_VALUES: Record<PieceSymbol, number> = {
   k: 100,
 };
 
-const PIECE_NAMES: Record<PieceSymbol, string> = {
+export const PIECE_NAMES: Record<PieceSymbol, string> = {
   p: "Pawn",
   n: "Knight",
   b: "Bishop",
