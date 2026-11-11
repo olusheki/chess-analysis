@@ -367,6 +367,24 @@ describe("useReviewStore (Zustand reactive review state)", () => {
     expect(useReviewStore.getState().plainEnglishNotation).toBe(true);
     store.setPlainEnglishNotation(false);
 
+    // clearExplanations invalidates cached move explanations and storyline while retaining analysis
+    store.setExplanation(1, {
+      badge: "Best",
+      shortComment: "Solid move.",
+      detailedExplanation: "Good central development.",
+    });
+    store.setStoryline({
+      headline: "Test game",
+      summary: "Summary",
+      whiteTakeaway: "W",
+      blackTakeaway: "B",
+    });
+    expect(useReviewStore.getState().explanations[1]).toBeDefined();
+    store.clearExplanations();
+    expect(useReviewStore.getState().explanations).toEqual({});
+    expect(useReviewStore.getState().storyline).toBeNull();
+    expect(useReviewStore.getState().analysis).not.toBeNull();
+
     // Reset clears everything cleanly
     store.flipBoard();
     store.reset();

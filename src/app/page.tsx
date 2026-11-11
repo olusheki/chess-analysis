@@ -100,6 +100,7 @@ export default function GameReviewPage() {
     setPlainEnglishNotation,
     setExplanation,
     setStoryline,
+    clearExplanations,
     jumpToPly,
     goToStart,
     prevMove,
@@ -126,6 +127,35 @@ export default function GameReviewPage() {
   const [customPgnDraft, setCustomPgnDraft] = useState(SAMPLE_GAMES[1].pgn);
   const [previewCustomPv, setPreviewCustomPv] = useState<CustomPvPreview | null>(null);
   const [customPvStep, setCustomPvStep] = useState(0);
+  const [geminiApiKey, setGeminiApiKey] = useState("");
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("chess_review_gemini_api_key");
+      if (saved) setGeminiApiKey(saved);
+    } catch {
+      // Ignore storage access errors
+    }
+  }, []);
+
+  const handleChangeGeminiApiKey = useCallback(
+    (nextKey: string) => {
+      const cleaned = nextKey.trim();
+      setGeminiApiKey(cleaned);
+      setFailedExplainPlies({});
+      clearExplanations();
+      try {
+        if (cleaned) {
+          window.localStorage.setItem("chess_review_gemini_api_key", cleaned);
+        } else {
+          window.localStorage.removeItem("chess_review_gemini_api_key");
+        }
+      } catch {
+        // Ignore storage access errors
+      }
+    },
+    [clearExplanations]
+  );
 
   const activeCustomPv =
     sidebarTab === "analysis" &&
@@ -245,13 +275,21 @@ export default function GameReviewPage() {
       personaId,
     };
 
+    const trimmedKey = geminiApiKey.trim();
     const storylinePromise =
       process.env.NEXT_PUBLIC_STATIC_EXPORT === "true"
-        ? Promise.resolve(buildOfflineGameStoryline(storyPayload))
+        ? trimmedKey
+          ? import("@/lib/ai/gemini-coach").then(({ GeminiCoachService }) =>
+              new GeminiCoachService(trimmedKey).generateGameStoryline(storyPayload)
+            )
+          : Promise.resolve(buildOfflineGameStoryline(storyPayload))
         : fetch("/api/explain", {
             method: "POST",
             signal: controller.signal,
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(trimmedKey ? { "x-gemini-api-key": trimmedKey } : {}),
+            },
             body: JSON.stringify({
               mode: "storyline",
               payload: storyPayload,
@@ -269,7 +307,7 @@ export default function GameReviewPage() {
     return () => {
       controller.abort();
     };
-  }, [analysis, analysisStatus, coachColor, personaId, setStoryline, storyline]);
+  }, [analysis, analysisStatus, coachColor, geminiApiKey, personaId, setStoryline, storyline]);
 
   // Auto-load Opera Game on initial mount if idle
   useEffect(() => {
@@ -318,7 +356,7 @@ export default function GameReviewPage() {
   );
 
   const explainKey = activeMove
-    ? `${analysisRunId}:${coachColor}:${personaId}:${activeMove.ply}`
+    ? `${analysisRunId}:${coachColor}:${personaId}:${geminiApiKey.trim() ? "key" : "nokey"}:${activeMove.ply}`
     : null;
 
   // Fetch grounded coach explanation lazily when navigating to a ply or switching coachColor
@@ -349,18 +387,27 @@ export default function GameReviewPage() {
       bestMovePV: activeMove.bestMovePvSan,
       refutationPV: activeMove.refutationPvSan ?? [],
       tacticalContext: activeMove.tacticalContext,
+      coachInsights: activeMove.coachInsights,
       personaId,
       fenBefore: activeMove.fenBefore,
       fenAfter: activeMove.fenAfter,
     };
 
+    const trimmedKey = geminiApiKey.trim();
     const explainPromise =
       process.env.NEXT_PUBLIC_STATIC_EXPORT === "true"
-        ? Promise.resolve(buildOfflineMoveExplanation(movePayload))
+        ? trimmedKey
+          ? import("@/lib/ai/gemini-coach").then(({ GeminiCoachService }) =>
+              new GeminiCoachService(trimmedKey).explainMove(movePayload)
+            )
+          : Promise.resolve(buildOfflineMoveExplanation(movePayload))
         : fetch("/api/explain", {
             method: "POST",
             signal: controller.signal,
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(trimmedKey ? { "x-gemini-api-key": trimmedKey } : {}),
+            },
             body: JSON.stringify({
               mode: "move",
               payload: movePayload,
@@ -385,7 +432,7 @@ export default function GameReviewPage() {
     return () => {
       controller.abort();
     };
-  }, [activeMove, analysis, coachColor, explainKey, explanations, failedExplainPlies, personaId, setExplanation]);
+  }, [activeMove, analysis, coachColor, explainKey, explanations, failedExplainPlies, geminiApiKey, personaId, setExplanation]);
 
   // Compute displayed FEN, move highlight, badge, and arrows
   const boardView = useMemo(() => {
@@ -889,6 +936,9 @@ export default function GameReviewPage() {
                   <div className="order-1 lg:order-2">
                     <CoachCard
                       personaId={personaId}
+                      onChangePersona={setPersonaId}
+                      geminiApiKey={geminiApiKey}
+                      onChangeGeminiApiKey={handleChangeGeminiApiKey}
                       coachColor={coachColor}
                       onChangeCoachColor={setCoachColor}
                       plainEnglish={plainEnglishNotation}

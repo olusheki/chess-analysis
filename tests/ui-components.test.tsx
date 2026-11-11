@@ -882,5 +882,66 @@ describe("UI components & visual geometry", () => {
       // Confirm each coach renders genuinely different portrait paths/features
       expect(new Set([dannySvg, sageSvg, blazeSvg]).size).toBe(3);
     });
+
+    it("renders persona identity, coachingTip (with plain English toggle), persona switcher pills, and optional API key drawer in CoachCard", () => {
+      const onChangePersona = vi.fn();
+      const onChangeApiKey = vi.fn();
+      render(
+        <CoachCard
+          personaId="sage"
+          onChangePersona={onChangePersona}
+          geminiApiKey=""
+          onChangeGeminiApiKey={onChangeApiKey}
+          coachColor="white"
+          plainEnglish={true}
+          moveNumber={7}
+          playedBy="White"
+          moveSan="Qh5"
+          badge="Mistake"
+          bestMoveSan="Nf3"
+          bestMovePvSan={["Nf3", "Nc6"]}
+          explanation={{
+            badge: "Mistake",
+            shortComment: "Premature queen foray.",
+            detailedExplanation: "Moving Nf3 develops with tempo instead.",
+            bestMoveReasoning: "Developing the knight helps.",
+            coachingTip: "Avoid chasing flanks before developing Nf3 and Bc4.",
+          }}
+          retryState={{
+            active: false,
+            ply: null,
+            fen: null,
+            targetUci: null,
+            targetSan: null,
+            status: "idle",
+            feedback: null,
+            attempts: 0,
+          }}
+          showBestMove={false}
+          bestMovePreviewIndex={0}
+          onStartRetry={vi.fn()}
+          onExitRetry={vi.fn()}
+          onToggleBestMove={vi.fn()}
+          onStepBestMove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText("Grandmaster Sage")).toBeInTheDocument();
+      expect(screen.getByText(/Strategic Theorist/)).toBeInTheDocument();
+      // coachingTip rendered and formatted in plain English by default
+      expect(screen.getByText(/Coach Tip:/i)).toBeInTheDocument();
+      expect(screen.getByText(/knight f3.*bishop c4/i)).toBeInTheDocument();
+
+      // Switch persona inside CoachCard
+      fireEvent.click(screen.getByRole("button", { name: /select coach blaze/i }));
+      expect(onChangePersona).toHaveBeenCalledWith("drillmaster");
+
+      // Open API key settings and apply a key
+      fireEvent.click(screen.getByRole("button", { name: /gemini api key settings/i }));
+      const input = screen.getByLabelText("Optional Gemini API key");
+      fireEvent.change(input, { target: { value: "  AIzaTestKey123  " } });
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+      expect(onChangeApiKey).toHaveBeenCalledWith("AIzaTestKey123");
+    });
   });
 });

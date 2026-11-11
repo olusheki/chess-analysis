@@ -47,6 +47,7 @@ export interface ReviewStoreState {
   togglePlainEnglishNotation: () => void;
   setExplanation: (ply: number, explanation: CoachExplanationResponse) => void;
   setStoryline: (storyline: GameStorylineResponse) => void;
+  clearExplanations: () => void;
 
   jumpToPly: (ply: number) => void;
   goToStart: () => void;
@@ -149,6 +150,8 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
     })),
 
   setStoryline: (storyline) => set({ storyline }),
+
+  clearExplanations: () => set({ explanations: {}, storyline: null }),
 
   jumpToPly: (ply) => {
     const { analysis } = get();
