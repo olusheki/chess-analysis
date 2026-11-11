@@ -333,10 +333,10 @@ describe("tactical-tagger (deterministic board feature detector)", () => {
     expect(g10Ref.hangingPieceDetails?.square).toBe("g2");
     expect(g10Ref.hangingPieceDetails?.piece).toBe("Pawn");
 
-    // 1c. En passant refutation capture: d5 captured via exd6 e.p. (with c7 absent so d6 is undefended)
-    const epBefore = "rnbqkbnr/pp2pppp/8/4P3/8/8/PPPP1PPP/RNBQKB1R b KQkq - 0 2";
-    const epAfter = "rnbqkbnr/pp2pppp/8/3pP3/8/8/PPPP1PPP/RNBQKB1R w KQkq d6 0 3";
-    const epCtx = extractTacticalContext(epBefore, epAfter, "d5", 2, {
+    // 1c. En passant refutation capture: d5 captured via exd6 e.p. (d6 completely undefended)
+    const epBefore = "rnb1k1nr/pp1p1ppp/8/4P3/8/8/PPPP1PPP/RNBQKB1R b KQkq - 0 4";
+    const epAfter = "rnb1k1nr/pp3ppp/8/3pP3/8/8/PPPP1PPP/RNBQKB1R w KQkq d6 0 5";
+    const epCtx = extractTacticalContext(epBefore, epAfter, "d5", 4, {
       refutationPvSan: ["exd6"],
       bestMoveSan: "e6",
       badge: "Inaccuracy",
@@ -394,9 +394,9 @@ describe("tactical-tagger (deterministic board feature detector)", () => {
     expect(missMate.missedTactic?.kind).toBe("CHECKMATE");
     expect(missMate.missedTactic?.missedMoveSan).toBe("Qa1#");
 
-    // 6. MISSED_CAPTURE: G03 31. Rb6 missing 31. Rxa8 (free Rook), and G11 9... O-O missing 9... Qxd4
-    const missCapBefore = "r5k1/5ppp/R7/8/8/8/5PPP/6K1 w - - 0 31";
-    const missCapAfter = "r5k1/5ppp/1R6/8/8/8/5PPP/6K1 b - - 1 31";
+    // 6. MISSED_CAPTURE: G03 31. Rb6 missing 31. Rxa8 (free Rook with King on h7), and G11 9... O-O missing 9... Qxd4
+    const missCapBefore = "r7/5ppk/R6p/8/8/8/5PPP/6K1 w - - 0 31";
+    const missCapAfter = "r7/5ppk/1R5p/8/8/8/5PPP/6K1 b - - 1 31";
     const missCap = extractTacticalContext(missCapBefore, missCapAfter, "Rb6", 31, {
       bestMoveSan: "Rxa8",
       badge: "Blunder",

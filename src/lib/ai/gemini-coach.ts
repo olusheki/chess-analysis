@@ -184,6 +184,8 @@ ${req.tacticalContext.hangingPieceDetails ? `- ${req.badge === "Brilliant" ? "SA
 ${req.tacticalContext.forkTargets ? `- FORK TARGETS: ${req.tacticalContext.forkTargets.map((t) => `${t.piece} on ${t.square}`).join(", ")}` : ""}
 ${req.tacticalContext.pinnedPieceDetails ? `- PINNED PIECE: ${req.tacticalContext.pinnedPieceDetails.piece} on ${req.tacticalContext.pinnedPieceDetails.square} pinned to ${req.tacticalContext.pinnedPieceDetails.pinnedTo}` : ""}
 ${req.tacticalContext.skeweredPieceDetails ? `- SKEWER: ${req.tacticalContext.skeweredPieceDetails.frontPiece} on ${req.tacticalContext.skeweredPieceDetails.frontSquare} in front of ${req.tacticalContext.skeweredPieceDetails.backPiece} on ${req.tacticalContext.skeweredPieceDetails.backSquare}` : ""}
+${req.tacticalContext.allowedThreat ? `- ALLOWED THREAT: ${req.tacticalContext.allowedThreat.kind} via ${req.tacticalContext.allowedThreat.refutationMoveSan ?? "refutation"}${req.tacticalContext.allowedThreat.targetSummary ? ` (${req.tacticalContext.allowedThreat.targetSummary})` : ""}` : ""}
+${req.tacticalContext.missedTactic ? `- MISSED TACTIC: ${req.tacticalContext.missedTactic.kind} via ${req.tacticalContext.missedTactic.missedMoveSan ?? req.engineBestMove}${req.tacticalContext.missedTactic.targetSummary ? ` (${req.tacticalContext.missedTactic.targetSummary})` : ""}` : ""}
 - Mover's Engine Best Move: ${req.engineBestMove}
 - Mover's Best PV Line: ${req.bestMovePV.slice(0, 4).join(" ")}
 ${req.refutationPV && req.refutationPV.length > 0 ? `- Next Reply / Punishment Line (${isPlayerMove ? oppName : "Your Reply"}): ${req.refutationPV.slice(0, 4).join(" ")}` : ""}

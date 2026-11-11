@@ -5,6 +5,7 @@
  */
 
 import { Chess, Square, PieceSymbol, Color, Move } from "chess.js";
+import type { MoveBadge } from "./move-classifier";
 import { staticExchangeOnSquare } from "./sacrifice-detector";
 
 export type TacticalTag =
@@ -21,7 +22,27 @@ export type TacticalTag =
   | "CENTER_CONTROL"
   | "KING_SAFETY_CASTLE"
   | "TEMPO_GAIN"
-  | "PAWN_BREAK";
+  | "PAWN_BREAK"
+  | "ALLOWS_MATE"
+  | "ALLOWS_FORK"
+  | "MISSED_MATE"
+  | "MISSED_FORK"
+  | "MISSED_CAPTURE";
+
+export interface TacticalThreatDetail {
+  kind: "CHECKMATE" | "FORK" | "FREE_CAPTURE";
+  refutationMoveSan?: string;
+  missedMoveSan?: string;
+  targetSquares?: Square[];
+  targetSummary?: string;
+  netGain?: number;
+}
+
+export interface ExtractTacticalOptions {
+  bestMoveSan?: string;
+  refutationPvSan?: string[];
+  badge?: MoveBadge;
+}
 
 export interface TacticalContext {
   tags: TacticalTag[];
@@ -30,6 +51,8 @@ export interface TacticalContext {
   pinnedPieceDetails?: { square: Square; piece: string; pinnedTo: string };
   skeweredPieceDetails?: { frontSquare: Square; frontPiece: string; backSquare: Square; backPiece: string };
   discoveredTarget?: { square: Square; piece: string };
+  allowedThreat?: TacticalThreatDetail;
+  missedTactic?: TacticalThreatDetail;
   isCheck: boolean;
   isCastle: boolean;
   gamePhase: "Opening" | "Middlegame" | "Endgame";
@@ -200,6 +223,215 @@ function hasMateInOne(fen: string, attackerColor: Color): boolean {
   return false;
 }
 
+const ERROR_BADGES = new Set<MoveBadge>(["Inaccuracy", "Mistake", "Miss", "Blunder"]);
+const SEVERE_ERROR_BADGES = new Set<MoveBadge>(["Miss", "Blunder"]);
+
+function playSafeMove(
+  fen: string,
+  moveSan?: string
+): { chess: Chess; move: Move } | null {
+  if (!moveSan) return null;
+  try {
+    const next = new Chess(fen);
+    const move = next.move(moveSan);
+    return move ? { chess: next, move } : null;
+  } catch {
+    return null;
+  }
+}
+
+function getCapturedSquare(move: Move): Square | null {
+  if (!move.captured) return null;
+  if (move.flags.includes("e")) {
+    return `${move.to[0]}${move.from[1]}` as Square;
+  }
+  return move.to;
+}
+
+function getCaptureNetGain(capMove: Move, chessAfterCap: Chess, defenderColor: Color): number {
+  if (!capMove.captured) return 0;
+  const promoGain = capMove.promotion ? PIECE_VALUES[capMove.promotion] - 1 : 0;
+  const capturedVal = PIECE_VALUES[capMove.captured] + promoGain;
+  const replyLoss = staticExchangeOnSquare(chessAfterCap, capMove.to, defenderColor);
+  return capturedVal - replyLoss;
+}
+
+function findSafeForkTargets(
+  chess: Chess,
+  destSq: Square,
+  attackerColor: Color,
+  defenderColor: Color
+): { square: Square; piece: string }[] {
+  const board = chess.board();
+  const movedPiece = chess.get(destSq);
+  if (!movedPiece || movedPiece.color !== attackerColor) return [];
+
+  const attacked = getPieceAttackedSquares(board, destSq, attackerColor, movedPiece.type);
+  const targets: { square: Square; piece: string; sortVal: number }[] = [];
+  for (const targetSq of attacked) {
+    const [tr, tc] = toCoords(targetSq);
+    const targetPiece = board[tr][tc];
+    if (targetPiece && targetPiece.color === defenderColor && targetPiece.type !== "p") {
+      targets.push({
+        square: targetSq,
+        piece: PIECE_NAMES[targetPiece.type],
+        sortVal: targetPiece.type === "k" ? 100 : PIECE_VALUES[targetPiece.type],
+      });
+    }
+  }
+
+  if (targets.length < 2) return [];
+  if (staticExchangeOnSquare(chess, destSq, defenderColor) > 0) return [];
+  targets.sort((a, b) => b.sortVal - a.sortVal);
+  return targets.map(({ square, piece }) => ({ square, piece }));
+}
+
+function findKingSquare(chess: Chess, color: Color): Square | null {
+  const board = chess.board();
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (p && p.color === color && p.type === "k") {
+        return toSquare(r, c);
+      }
+    }
+  }
+  return null;
+}
+
+function formatTargetSummary(targets: { square: Square; piece: string }[]): string {
+  return targets
+    .slice(0, 2)
+    .map((t) => `${t.piece} on ${t.square}`)
+    .join(" and ");
+}
+
+function resolveRefutationHangingPiece(
+  chessAfter: Chess,
+  refutationPlayed: { chess: Chess; move: Move } | null,
+  activeColor: Color
+): TacticalContext["hangingPieceDetails"] {
+  if (!refutationPlayed) return undefined;
+  const capSq = getCapturedSquare(refutationPlayed.move);
+  if (!capSq) return undefined;
+
+  const victim = chessAfter.get(capSq);
+  if (!victim || victim.color !== activeColor || victim.type === "k") return undefined;
+
+  const refGain = getCaptureNetGain(refutationPlayed.move, refutationPlayed.chess, activeColor);
+  if (refGain <= 0) return undefined;
+
+  return {
+    square: capSq,
+    piece: PIECE_NAMES[victim.type],
+    value: PIECE_VALUES[victim.type],
+  };
+}
+
+function detectAllowedAndMissedThreats(
+  fenBefore: string,
+  moveSan: string,
+  activeColor: Color,
+  opponentColor: Color,
+  refutationPlayed: { chess: Chess; move: Move } | null,
+  options: ExtractTacticalOptions | undefined,
+  addTag: (t: TacticalTag) => void
+): {
+  allowedThreat?: TacticalThreatDetail;
+  missedTactic?: TacticalThreatDetail;
+} {
+  if (options?.badge !== undefined && !ERROR_BADGES.has(options.badge)) {
+    return {};
+  }
+
+  let allowedThreat: TacticalThreatDetail | undefined;
+  if (refutationPlayed) {
+    const { chess: chessAfterRef, move: refMove } = refutationPlayed;
+    if (chessAfterRef.isCheckmate()) {
+      const kingSq = findKingSquare(chessAfterRef, activeColor);
+      addTag("ALLOWS_MATE");
+      allowedThreat = {
+        kind: "CHECKMATE",
+        refutationMoveSan: refMove.san,
+        targetSquares: kingSq ? [kingSq] : undefined,
+        targetSummary: kingSq ? `King on ${kingSq}` : undefined,
+      };
+    } else {
+      const refForks = findSafeForkTargets(chessAfterRef, refMove.to, opponentColor, activeColor);
+      if (refForks.length >= 2) {
+        addTag("ALLOWS_FORK");
+        allowedThreat = {
+          kind: "FORK",
+          refutationMoveSan: refMove.san,
+          targetSquares: refForks.slice(0, 2).map((t) => t.square),
+          targetSummary: formatTargetSummary(refForks),
+        };
+      }
+    }
+  }
+
+  let missedTactic: TacticalThreatDetail | undefined;
+  if (options?.bestMoveSan && options.bestMoveSan !== moveSan) {
+    const bestPlayed = playSafeMove(fenBefore, options.bestMoveSan);
+    if (bestPlayed) {
+      const { chess: chessAfterBest, move: bestMove } = bestPlayed;
+      if (chessAfterBest.isCheckmate()) {
+        const oppKingSq = findKingSquare(chessAfterBest, opponentColor);
+        addTag("MISSED_MATE");
+        missedTactic = {
+          kind: "CHECKMATE",
+          missedMoveSan: bestMove.san,
+          targetSquares: oppKingSq ? [oppKingSq] : undefined,
+          targetSummary: oppKingSq ? `King on ${oppKingSq}` : undefined,
+        };
+      } else {
+        const capSq = getCapturedSquare(bestMove);
+        const netGain = capSq ? getCaptureNetGain(bestMove, chessAfterBest, opponentColor) : 0;
+        const missedForks = findSafeForkTargets(
+          chessAfterBest,
+          bestMove.to,
+          activeColor,
+          opponentColor
+        );
+        const allowPawnCap =
+          options?.badge === undefined || SEVERE_ERROR_BADGES.has(options.badge);
+
+        if (netGain >= 2 && capSq) {
+          const victim = bestMove.captured ? PIECE_NAMES[bestMove.captured] : "Piece";
+          addTag("MISSED_CAPTURE");
+          missedTactic = {
+            kind: "FREE_CAPTURE",
+            missedMoveSan: bestMove.san,
+            targetSquares: [capSq],
+            targetSummary: `${victim} on ${capSq}`,
+            netGain,
+          };
+        } else if (missedForks.length >= 2) {
+          addTag("MISSED_FORK");
+          missedTactic = {
+            kind: "FORK",
+            missedMoveSan: bestMove.san,
+            targetSquares: missedForks.slice(0, 2).map((t) => t.square),
+            targetSummary: formatTargetSummary(missedForks),
+          };
+        } else if (allowPawnCap && netGain >= 1 && capSq) {
+          const victim = bestMove.captured ? PIECE_NAMES[bestMove.captured] : "Pawn";
+          addTag("MISSED_CAPTURE");
+          missedTactic = {
+            kind: "FREE_CAPTURE",
+            missedMoveSan: bestMove.san,
+            targetSquares: [capSq],
+            targetSummary: `${victim} on ${capSq}`,
+            netGain,
+          };
+        }
+      }
+    }
+  }
+
+  return { allowedThreat, missedTactic };
+}
+
 /**
  * Extracts tactical and positional features between position before and after a move.
  */
@@ -207,7 +439,8 @@ export function extractTacticalContext(
   fenBefore: string,
   fenAfter: string,
   moveSan: string,
-  moveNumber: number
+  moveNumber: number,
+  options?: ExtractTacticalOptions
 ): TacticalContext {
   const chessBefore = new Chess(fenBefore);
   const chessAfter = new Chess(fenAfter);
@@ -283,23 +516,28 @@ export function extractTacticalContext(
     }
   }
 
-  // 3. Hanging Piece Detection using true SEE (handles pinned attackers/defenders & overloaded defenders)
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const piece = boardAfter[r][c];
-      if (!piece || piece.color !== activeColor || piece.type === "k") continue;
-      const sq = toSquare(r, c);
+  const refutationPlayed = playSafeMove(fenAfter, options?.refutationPvSan?.[0]);
 
-      const seeLoss = staticExchangeOnSquare(chessAfter, sq, opponentColor);
-      if (seeLoss <= 0) continue;
+  // 3. Hanging Piece Detection: prioritize the piece targeted by engine's refutation capture first
+  hangingPieceDetails = resolveRefutationHangingPiece(chessAfter, refutationPlayed, activeColor);
+  if (!hangingPieceDetails) {
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const piece = boardAfter[r][c];
+        if (!piece || piece.color !== activeColor || piece.type === "k") continue;
+        const sq = toSquare(r, c);
 
-      const pieceValue = PIECE_VALUES[piece.type];
-      if (!hangingPieceDetails || pieceValue > hangingPieceDetails.value) {
-        hangingPieceDetails = {
-          square: sq,
-          piece: PIECE_NAMES[piece.type],
-          value: pieceValue,
-        };
+        const seeLoss = staticExchangeOnSquare(chessAfter, sq, opponentColor);
+        if (seeLoss <= 0) continue;
+
+        const pieceValue = PIECE_VALUES[piece.type];
+        if (!hangingPieceDetails || pieceValue > hangingPieceDetails.value) {
+          hangingPieceDetails = {
+            square: sq,
+            piece: PIECE_NAMES[piece.type],
+            value: pieceValue,
+          };
+        }
       }
     }
   }
@@ -317,26 +555,10 @@ export function extractTacticalContext(
         activeColor,
         movedPieceAfter.type
       );
-
-      for (const targetSq of attackedFromDest) {
-        const [tr, tc] = toCoords(targetSq);
-        const targetPiece = boardAfter[tr][tc];
-        if (
-          targetPiece &&
-          targetPiece.color === opponentColor &&
-          targetPiece.type !== "p"
-        ) {
-          forkTargets.push({ square: targetSq, piece: PIECE_NAMES[targetPiece.type] });
-        }
-      }
-
-      if (
-        forkTargets.length >= 2 &&
-        staticExchangeOnSquare(chessAfter, movedObj.to, opponentColor) <= 0
-      ) {
+      const safeForks = findSafeForkTargets(chessAfter, movedObj.to, activeColor, opponentColor);
+      if (safeForks.length >= 2) {
+        forkTargets.push(...safeForks);
         addTag("TACTICAL_FORK");
-      } else {
-        forkTargets.length = 0;
       }
 
       // 5. Tempo Gain: minor piece or pawn attacks enemy Queen or Rook
@@ -537,6 +759,16 @@ export function extractTacticalContext(
     }
   }
 
+  const { allowedThreat, missedTactic } = detectAllowedAndMissedThreats(
+    fenBefore,
+    moveSan,
+    activeColor,
+    opponentColor,
+    refutationPlayed,
+    options,
+    addTag
+  );
+
   return {
     tags,
     hangingPieceDetails,
@@ -544,6 +776,8 @@ export function extractTacticalContext(
     pinnedPieceDetails,
     skeweredPieceDetails,
     discoveredTarget,
+    allowedThreat,
+    missedTactic,
     isCheck,
     isCastle,
     gamePhase,

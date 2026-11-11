@@ -168,8 +168,8 @@ const MUTANTS = [
   {
     name: "M22: Bypass SEE safety gate for TACTICAL_FORK in tactical-tagger.ts",
     file: "src/lib/analysis/tactical-tagger.ts",
-    target: "if (\n        forkTargets.length >= 2 &&\n        staticExchangeOnSquare(chessAfter, movedObj.to, opponentColor) <= 0\n      ) {",
-    replacement: "if (forkTargets.length >= 2) {",
+    target: "if (staticExchangeOnSquare(chess, destSq, defenderColor) > 0) return [];",
+    replacement: "if (false) return [];",
     testFile: "tests/tactical-tagger.test.ts",
   },
   {
@@ -207,6 +207,28 @@ const MUTANTS = [
     target: '{personaId === "sage" && (\n          <g data-portrait="sage">',
     replacement: '{false && personaId === "sage" && (\n          <g data-portrait="sage">',
     testFile: "tests/ui-components.test.tsx",
+  },
+  {
+    name: "M28: Bypass refutation-first HANGING_PIECE prioritization in tactical-tagger.ts",
+    file: "src/lib/analysis/tactical-tagger.ts",
+    target:
+      "hangingPieceDetails = resolveRefutationHangingPiece(chessAfter, refutationPlayed, activeColor);",
+    replacement: "hangingPieceDetails = undefined;",
+    testFile: "tests/tactical-tagger.test.ts",
+  },
+  {
+    name: "M29: Bypass error guard allowing Best moves to emit ALLOWS/MISSED tactics in tactical-tagger.ts",
+    file: "src/lib/analysis/tactical-tagger.ts",
+    target: "if (options?.badge !== undefined && !ERROR_BADGES.has(options.badge)) {",
+    replacement: "if (false) {",
+    testFile: "tests/tactical-tagger.test.ts",
+  },
+  {
+    name: "M30: Drop playerThreatNote grounding from offline Blunder/Miss coach explanations in offline-coach.ts",
+    file: "src/lib/ai/offline-coach.ts",
+    target: "const playerThreatNote = describeErrorThreats(tacticalContext, oppLabel, true);",
+    replacement: "const playerThreatNote = \"\";",
+    testFile: "tests/gemini-coach.test.ts",
   },
 ];
 

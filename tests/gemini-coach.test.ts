@@ -1604,4 +1604,181 @@ describe("gemini-coach & explainability grounding", () => {
     expect(playerGreatAndBest[3].detailedExplanation).toContain("tucking the king safely");
     expect(playerGreatAndBest[4].detailedExplanation).toContain("harmonizing development");
   });
+
+  it("P0: surfaces allowedThreat and missedTactic in offline explanations & Gemini prompts with zero piece-square hallucinations", async () => {
+    const g10ForkBefore = "r2qkbnr/p2pppp1/1p6/1BnN3p/5B2/8/PPP2PbP/R2QK1NR b KQkq - 1 10";
+    const g10ForkAfter = "r2qkbnr/p2p1pp1/1p2p3/1BnN3p/5B2/8/PPP2PbP/R2QK1NR w KQkq - 0 11";
+
+    // 1) Player Blunder allowing fork (Nc7+ forking King on e8 and Rook on a8)
+    const blunderFork = await coach.explainMove({
+      moveSan: "e6",
+      playedBy: "Black",
+      coachFor: "Black",
+      moveNumber: 10,
+      badge: "Blunder",
+      evalBefore: "+0.8",
+      evalAfter: "+6.4",
+      deltaWP: 38.0,
+      engineBestMove: "Na6",
+      bestMovePV: ["Na6", "Nf3"],
+      refutationPV: ["Nc7+", "Kf8"],
+      fenBefore: g10ForkBefore,
+      fenAfter: g10ForkAfter,
+      tacticalContext: makeContext({
+        tags: ["ALLOWS_FORK"],
+        allowedThreat: {
+          kind: "FORK",
+          refutationMoveSan: "Nc7+",
+          targetSquares: ["e8", "a8"],
+          targetSummary: "King on e8 and Rook on a8",
+        },
+      }),
+    });
+    expect(blunderFork.detailedExplanation).toContain("Nc7+");
+    expect(blunderFork.detailedExplanation).toContain("King on e8 and Rook on a8");
+    expect(validateExplanationGrounding(blunderFork.detailedExplanation, g10ForkAfter, g10ForkBefore).valid).toBe(true);
+
+    // 2) Player Miss with missed fork (Qa4+ forking King on e8 and Bishop on b4)
+    const g03Before = "r1bqk1nr/ppp2ppp/3p4/4p3/1b2P3/3P1N2/P3KPPP/RNBQ1B1R w kq - 0 8";
+    const g03After = "r1bqk1nr/ppp2ppp/3p4/4p3/1b2P3/P2P1N2/4KPPP/RNBQ1B1R b kq - 0 8";
+    const missFork = await coach.explainMove({
+      moveSan: "a3",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 8,
+      badge: "Miss",
+      evalBefore: "+4.2",
+      evalAfter: "+0.5",
+      deltaWP: 34.0,
+      engineBestMove: "Qa4+",
+      bestMovePV: ["Qa4+", "Nc6", "Qxb4"],
+      fenBefore: g03Before,
+      fenAfter: g03After,
+      tacticalContext: makeContext({
+        tags: ["MISSED_FORK"],
+        missedTactic: {
+          kind: "FORK",
+          missedMoveSan: "Qa4+",
+          targetSquares: ["e8", "b4"],
+          targetSummary: "King on e8 and Bishop on b4",
+        },
+      }),
+    });
+    expect(missFork.detailedExplanation).toContain("Qa4+");
+    expect(missFork.detailedExplanation).toContain("King on e8 and Bishop on b4");
+    expect(validateExplanationGrounding(missFork.detailedExplanation, g03After, g03Before).valid).toBe(true);
+
+    // 3) Player Mistake with allowed mate (Re1#)
+    const mateBefore = "4r1k1/5ppp/8/8/8/8/P4PPP/6K1 w - - 0 30";
+    const mateAfter = "4r1k1/5ppp/8/8/P7/8/5PPP/6K1 b - - 0 30";
+    const mistakeMate = await coach.explainMove({
+      moveSan: "a4",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 30,
+      badge: "Mistake",
+      evalBefore: "0.0",
+      evalAfter: "-M1",
+      deltaWP: 48.0,
+      engineBestMove: "Kf1",
+      bestMovePV: ["Kf1"],
+      refutationPV: ["Re1#"],
+      fenBefore: mateBefore,
+      fenAfter: mateAfter,
+      tacticalContext: makeContext({
+        tags: ["ALLOWS_MATE"],
+        allowedThreat: {
+          kind: "CHECKMATE",
+          refutationMoveSan: "Re1#",
+          targetSquares: ["g1"],
+          targetSummary: "King on g1",
+        },
+      }),
+    });
+    expect(mistakeMate.detailedExplanation).toContain("Re1#");
+    expect(mistakeMate.detailedExplanation.toLowerCase()).toContain("checkmate");
+    expect(validateExplanationGrounding(mistakeMate.detailedExplanation, mateAfter, mateBefore).valid).toBe(true);
+
+    // 4) Opponent corner on opponent's Blunder/Miss names allowed/missed threat
+    const oppMissCapBefore = "r5k1/5ppp/R7/8/8/8/5PPP/6K1 w - - 0 31";
+    const oppMissCapAfter = "r5k1/5ppp/1R6/8/8/8/5PPP/6K1 b - - 1 31";
+    const oppMissed = await coach.explainMove({
+      moveSan: "Rb6",
+      playedBy: "White",
+      coachFor: "Black",
+      opponentName: "olusheki",
+      moveNumber: 31,
+      badge: "Miss",
+      evalBefore: "+8.0",
+      evalAfter: "+0.2",
+      deltaWP: 39.0,
+      engineBestMove: "Rxa8",
+      bestMovePV: ["Rxa8"],
+      fenBefore: oppMissCapBefore,
+      fenAfter: oppMissCapAfter,
+      tacticalContext: makeContext({
+        tags: ["MISSED_CAPTURE"],
+        missedTactic: {
+          kind: "FREE_CAPTURE",
+          missedMoveSan: "Rxa8",
+          targetSquares: ["a8"],
+          targetSummary: "Rook on a8",
+          netGain: 5,
+        },
+      }),
+    });
+    expect(oppMissed.detailedExplanation).toContain("Rxa8");
+    expect(oppMissed.detailedExplanation).toContain("Rook on a8");
+    expect(validateExplanationGrounding(oppMissed.detailedExplanation, oppMissCapAfter, oppMissCapBefore).valid).toBe(true);
+
+    // 5) Gemini prompt includes ALLOWED THREAT & MISSED TACTIC factual grounding
+    const onlineCoach = new GeminiCoachService("test-api-key");
+    mockGenerateContent.mockResolvedValueOnce({
+      text: JSON.stringify({
+        badge: "Blunder",
+        shortComment: "e6 walks into a knight fork.",
+        detailedExplanation: "This allows Nc7+, forking the King on e8 and Rook on a8.",
+        bestMoveReasoning: "Na6 guarded c7.",
+      }),
+    });
+    await onlineCoach.explainMove({
+      moveSan: "e6",
+      playedBy: "Black",
+      coachFor: "Black",
+      moveNumber: 10,
+      badge: "Blunder",
+      evalBefore: "+0.8",
+      evalAfter: "+6.4",
+      deltaWP: 38.0,
+      engineBestMove: "Na6",
+      bestMovePV: ["Na6", "Nf3"],
+      refutationPV: ["Nc7+", "Kf8"],
+      fenBefore: g10ForkBefore,
+      fenAfter: g10ForkAfter,
+      tacticalContext: makeContext({
+        tags: ["ALLOWS_FORK", "MISSED_CAPTURE"],
+        allowedThreat: {
+          kind: "FORK",
+          refutationMoveSan: "Nc7+",
+          targetSquares: ["e8", "a8"],
+          targetSummary: "King on e8 and Rook on a8",
+        },
+        missedTactic: {
+          kind: "FREE_CAPTURE",
+          missedMoveSan: "Bxd5",
+          targetSquares: ["d5"],
+          targetSummary: "Knight on d5",
+          netGain: 3,
+        },
+      }),
+    });
+    const promptText =
+      mockGenerateContent.mock.calls.at(-1)?.[0]?.contents?.[0]?.parts?.[0]?.text ?? "";
+    expect(promptText).toContain("ALLOWED THREAT");
+    expect(promptText).toContain("Nc7+");
+    expect(promptText).toContain("King on e8 and Rook on a8");
+    expect(promptText).toContain("MISSED TACTIC");
+    expect(promptText).toContain("Bxd5");
+    expect(promptText).toContain("Knight on d5");
+  });
 });

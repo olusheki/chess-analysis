@@ -363,11 +363,17 @@ export async function analyzeGame(
       isKingCheckEscape,
     });
 
+    const refutationPvSan = evalAfter.lines[0]?.pvSan ?? [];
     const tacticalContext = extractTacticalContext(
       move.fenBefore,
       move.fenAfter,
       move.san,
-      move.moveNumber
+      move.moveNumber,
+      {
+        bestMoveSan: evalBefore.bestMoveSan,
+        refutationPvSan,
+        badge: classification.badge,
+      }
     );
 
     const coachInsights = analyzeComparativeReasons({
@@ -376,7 +382,7 @@ export async function analyzeGame(
       playedSan: move.san,
       bestMoveSan: evalBefore.bestMoveSan,
       bestMovePvSan: bestLine?.pvSan ?? [],
-      refutationPvSan: evalAfter.lines[0]?.pvSan ?? [],
+      refutationPvSan,
       moveNumber: move.moveNumber,
       isBook,
       playedTactics: tacticalContext,
@@ -394,7 +400,7 @@ export async function analyzeGame(
       bestMoveSan: evalBefore.bestMoveSan,
       bestMovePvSan: bestLine?.pvSan ?? [],
       altPvSan: secondLine?.pvSan ?? [],
-      refutationPvSan: evalAfter.lines[0]?.pvSan ?? [],
+      refutationPvSan,
       pvLines: evalBefore.lines.slice(0, 3).map((line) => ({
         multipv: line.multipv,
         cp: line.cp,

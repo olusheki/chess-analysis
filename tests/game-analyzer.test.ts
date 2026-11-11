@@ -495,4 +495,41 @@ describe("game-analyzer (full Tier 1 + Tier 2 pipeline)", () => {
     expect(getFenTurn("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1")).toBe("b");
     expect(getFenTurn("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")).toBe("w");
   });
+
+  it("P0: forwards bestMoveSan, refutationPvSan, and badge to extractTacticalContext during analyzeGame", async () => {
+    const pgn = "1. e4 e5 2. Qh5 g6 3. Nc3 *";
+    const mockEngine: ChessEngine = {
+      async evaluatePosition(fen: string, depth: number): Promise<PositionEval> {
+        if (fen.includes("6p1/4p2Q/4P3") && fen.includes(" w ")) {
+          return {
+            fen,
+            depth,
+            bestMoveUci: "h5e5",
+            bestMoveSan: "Qxe5+",
+            whiteCp: 720,
+            lines: [{ multipv: 1, cp: 720, pvUci: ["h5e5"], pvSan: ["Qxe5+"] }],
+          };
+        }
+        return {
+          fen,
+          depth,
+          bestMoveUci: "a7a6",
+          bestMoveSan: "a6",
+          whiteCp: 0,
+          lines: [{ multipv: 1, cp: 0, pvUci: ["a7a6"], pvSan: ["a6"] }],
+        };
+      },
+      dispose() {},
+    };
+
+    const res = await analyzeGame(pgn, mockEngine, { depth: 12 });
+    const blunderMove = res.moves[4]; // 3. Nc3
+    expect(blunderMove.san).toBe("Nc3");
+    expect(blunderMove.classification.badge).toBe("Miss");
+    expect(blunderMove.tacticalContext.tags).toContain("MISSED_FORK");
+    expect(blunderMove.tacticalContext.missedTactic?.missedMoveSan).toBe("Qxe5+");
+    expect(blunderMove.tacticalContext.missedTactic?.targetSquares).toEqual(
+      expect.arrayContaining(["e8", "h8"])
+    );
+  });
 });
