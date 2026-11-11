@@ -144,6 +144,49 @@ const MUTANTS = [
     replacement: "const status = 502;",
     testFile: "tests/api-routes.test.ts",
   },
+  {
+    name: "M19: Reintroduce unweighted 2.0 harmonic collapse in win-probability.ts",
+    file: "src/lib/engine/win-probability.ts",
+    target: "weightedInvSum += leverageWeight / Math.max(8.0, moveAccuracy);",
+    replacement: "weightedInvSum += leverageWeight / Math.max(1.0, moveAccuracy);",
+    testFile: "tests/win-probability.test.ts",
+  },
+  {
+    name: "M20: Remove upward opponent gap bound for massive rating mismatches in win-probability.ts",
+    file: "src/lib/engine/win-probability.ts",
+    target: "const maxUpwardGap = score >= 0.5 ? 600 : 350;",
+    replacement: "const maxUpwardGap = 2000;",
+    testFile: "tests/win-probability.test.ts",
+  },
+  {
+    name: "M21: Bypass isObviousFreeCapture Great suppression in move-classifier.ts",
+    file: "src/lib/analysis/move-classifier.ts",
+    target: "if (isBestMove && !isRecapture && !input.isObviousFreeCapture && cpPV2 !== undefined) {",
+    replacement: "if (isBestMove && !isRecapture && cpPV2 !== undefined) {",
+    testFile: "tests/move-classifier.test.ts",
+  },
+  {
+    name: "M22: Bypass SEE safety gate for TACTICAL_FORK in tactical-tagger.ts",
+    file: "src/lib/analysis/tactical-tagger.ts",
+    target: "if (\n        forkTargets.length >= 2 &&\n        staticExchangeOnSquare(chessAfter, movedObj.to, opponentColor) <= 0\n      ) {",
+    replacement: "if (forkTargets.length >= 2) {",
+    testFile: "tests/tactical-tagger.test.ts",
+  },
+  {
+    name: "M23: Reintroduce positive praise on Blunder/Miss in gemini-coach.ts",
+    file: "src/lib/ai/gemini-coach.ts",
+    target: "if (suppressOffensivePraise) {\n      return \"\";\n    }",
+    replacement: "if (false && suppressOffensivePraise) {\n      return \"\";\n    }",
+    testFile: "tests/gemini-coach.test.ts",
+  },
+  {
+    name: "M24: Allow Retry Move on opponent blunders in CoachCard.tsx",
+    file: "src/components/review/CoachCard.tsx",
+    target: "const canRetry =\n    !isOpponentMove &&\n    (badge === \"Blunder\" || badge === \"Mistake\" || badge === \"Miss\" || badge === \"Inaccuracy\");",
+    replacement:
+      "const canRetry =\n    badge === \"Blunder\" || badge === \"Mistake\" || badge === \"Miss\" || badge === \"Inaccuracy\";",
+    testFile: "tests/ui-components.test.tsx",
+  },
 ];
 
 let killed = 0;
