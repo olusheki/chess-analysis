@@ -10,6 +10,8 @@ import { MoveBadgeIcon } from "@/components/chess/MoveBadgeIcon";
 
 interface CoachCardProps {
   personaId: CoachPersonaId;
+  coachColor?: "white" | "black";
+  onChangeCoachColor?: (color: "white" | "black") => void;
   moveNumber?: number;
   playedBy?: "White" | "Black";
   moveSan?: string;
@@ -52,6 +54,8 @@ function CoachMascotAvatar({ color }: { color: string }) {
 
 export function CoachCard({
   personaId,
+  coachColor = "white",
+  onChangeCoachColor,
   moveNumber,
   playedBy,
   moveSan,
@@ -73,17 +77,61 @@ export function CoachCard({
   onStepBestMove,
 }: CoachCardProps) {
   const persona = getCoachPersona(personaId);
+  const coachPerspective: "White" | "Black" = coachColor === "black" ? "Black" : "White";
+  const activeMode = explanation?.coachMode ?? storyline?.coachMode ?? "offline";
+
+  const perspectiveBar = (
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5 border-b border-[#3d3b38]/70 pb-2 text-[10px]">
+      <div className="flex items-center gap-1">
+        <span className="font-semibold uppercase tracking-wide text-[#9e9c98]">Coach Side:</span>
+        {(["white", "black"] as const).map((side) => {
+          const active = coachColor === side;
+          return (
+            <button
+              key={side}
+              type="button"
+              onClick={() => onChangeCoachColor?.(side)}
+              aria-label={`Coach as ${side === "white" ? "White" : "Black"}`}
+              aria-pressed={active}
+              className={`rounded px-2 py-0.5 font-bold capitalize transition ${
+                active
+                  ? "bg-[#96bc4b] text-[#1a1917]"
+                  : "bg-[#262522] text-[#c9c7c3] hover:bg-[#312e2b] hover:text-white"
+              }`}
+            >
+              {side}
+            </button>
+          );
+        })}
+      </div>
+      <span
+        className={`rounded px-1.5 py-0.5 font-semibold ${
+          activeMode === "live"
+            ? "bg-[#96bc4b]/15 text-[#96bc4b]"
+            : "bg-[#262522] text-[#9e9c98]"
+        }`}
+      >
+        {activeMode === "live" ? "Gemini Live" : "Offline Coach"}
+      </span>
+    </div>
+  );
 
   // Starting position (Ply 0) shows the Game Overview Storyline
   if (!moveSan || !badge) {
     return (
       <div className="rounded-md border border-[#3d3b38] bg-[#21201d] p-3">
-        <div className="flex items-start gap-3">
+        {perspectiveBar}
+        <div
+          key={`recap-${coachColor}-${personaId}`}
+          className="animate-coach-enter flex items-start gap-3"
+        >
           <CoachMascotAvatar color={persona.accentColor} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 text-xs font-bold text-[#96bc4b]">
               <Sparkles className="h-3.5 w-3.5" />
-              <span>{persona.name} • Game Recap</span>
+              <span>
+                {persona.name} • Recap for {coachPerspective}
+              </span>
             </div>
             <h3 className="mt-1 text-sm font-bold text-white">
               {storyline?.headline || "Ready to review the game"}
@@ -105,17 +153,22 @@ export function CoachCard({
   }
 
   const badgeColor = BADGE_METADATA[badge].color;
+  const isOpponentMove = playedBy !== undefined && playedBy !== coachPerspective;
   const canRetry =
     badge === "Blunder" || badge === "Mistake" || badge === "Miss" || badge === "Inaccuracy";
 
   return (
     <div className="rounded-md border border-[#3d3b38] bg-[#21201d] p-3">
-      <div className="flex items-start gap-3">
+      {perspectiveBar}
+      <div
+        key={`move-${moveNumber}-${playedBy}-${moveSan}-${coachColor}-${personaId}`}
+        className="animate-coach-enter flex items-start gap-3"
+      >
         <CoachMascotAvatar color={persona.accentColor} />
         <div className="min-w-0 flex-1">
           {/* Move Badge Pill & Eval */}
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <MoveBadgeIcon badge={badge} size="sm" />
               <span className="text-sm font-extrabold text-white">
                 {moveNumber}
@@ -130,6 +183,11 @@ export function CoachCard({
               >
                 {badge}
               </span>
+              {isOpponentMove && (
+                <span className="rounded border border-[#3d3b38] bg-[#262522] px-1.5 py-0.5 text-[10px] font-semibold text-[#c9c7c3]">
+                  Opponent Move
+                </span>
+              )}
             </div>
             {evalLabel && (
               <span className="rounded bg-[#312e2b] px-2 py-0.5 font-mono text-xs font-bold text-white">

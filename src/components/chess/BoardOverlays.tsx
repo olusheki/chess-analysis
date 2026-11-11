@@ -152,6 +152,7 @@ export function BoardOverlays({ arrows, flipped }: BoardOverlaysProps) {
             strokeOpacity={style.opacity}
             strokeLinecap="round"
             markerEnd={`url(#arrowhead-${arrow.category})`}
+            className="animate-arrow-reveal"
           />
         );
       })}

@@ -422,5 +422,103 @@ describe("UI components & visual geometry", () => {
       expect(screen.getByText("FastUser")).toBeInTheDocument();
       expect(screen.queryByText("SlowUser")).toBeNull();
     });
+
+    it("renders single-side CoachCard perspective toggle, mode indicator, interactive AccuracyHeader selector, and persistent Chessboard selection reset", () => {
+      const onChangeCoachColor = vi.fn();
+      render(
+        <CoachCard
+          personaId="danny"
+          coachColor="white"
+          onChangeCoachColor={onChangeCoachColor}
+          moveNumber={10}
+          playedBy="Black"
+          moveSan="g5"
+          badge="Blunder"
+          bestMoveSan="Nf6"
+          bestMovePvSan={["Nf6", "d4"]}
+          explanation={{
+            badge: "Blunder",
+            shortComment: "Your opponent blundered with g5 — time to strike!",
+            detailedExplanation: "Nxg5 wins material immediately.",
+            coachMode: "offline",
+          }}
+          retryState={{
+            active: false, ply: null, fen: null, targetUci: null, targetSan: null,
+            status: "idle", feedback: null, attempts: 0,
+          }}
+          showBestMove={false}
+          bestMovePreviewIndex={0}
+          onStartRetry={vi.fn()}
+          onExitRetry={vi.fn()}
+          onToggleBestMove={vi.fn()}
+          onStepBestMove={vi.fn()}
+        />
+      );
+      expect(screen.getByText("Offline Coach")).toBeInTheDocument();
+      expect(screen.getByText("Opponent Move")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Coach as Black" }));
+      expect(onChangeCoachColor).toHaveBeenCalledWith("black");
+
+      cleanup();
+
+      const onSelectHeaderColor = vi.fn();
+      render(
+        <AccuracyHeader
+          whiteName="WhitePlayer"
+          blackName="BlackPlayer"
+          whiteEloHeader="800"
+          blackEloHeader="780"
+          summary={{
+            white: {
+              accuracy: 81.2,
+              estimatedElo: 860,
+              badgeCounts: {
+                Brilliant: 0, Great: 0, Best: 5, Excellent: 0, Good: 0,
+                Book: 2, Inaccuracy: 0, Mistake: 0, Miss: 0, Blunder: 0, Forced: 0,
+              },
+              phaseAccuracies: { opening: 90, middlegame: 80, endgame: 100 },
+            },
+            black: {
+              accuracy: 74.8,
+              estimatedElo: 790,
+              badgeCounts: {
+                Brilliant: 0, Great: 0, Best: 3, Excellent: 0, Good: 0,
+                Book: 2, Inaccuracy: 0, Mistake: 0, Miss: 0, Blunder: 1, Forced: 0,
+              },
+              phaseAccuracies: { opening: 85, middlegame: 70, endgame: 100 },
+            },
+          }}
+          coachColor="black"
+          onSelectCoachColor={onSelectHeaderColor}
+        />
+      );
+      expect(screen.getByText("Coaching")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /Coach as White/i }));
+      expect(onSelectHeaderColor).toHaveBeenCalledWith("white");
+
+      cleanup();
+
+      // Chessboard stays mounted without key={fen} yet clears selection when FEN changes
+      const { rerender } = render(
+        <Chessboard
+          fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+          interactive={true}
+          onMove={vi.fn()}
+        />
+      );
+      const boardSurface = screen.getByTestId("chessboard-grid");
+      fireEvent.click(screen.getByTestId("square-e2"));
+      expect(screen.getByTestId("legal-dot-e4")).toBeInTheDocument();
+
+      rerender(
+        <Chessboard
+          fen="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+          interactive={true}
+          onMove={vi.fn()}
+        />
+      );
+      expect(screen.getByTestId("chessboard-grid")).toBe(boardSurface);
+      expect(screen.queryByTestId("legal-dot-e4")).toBeNull();
+    });
   });
 });

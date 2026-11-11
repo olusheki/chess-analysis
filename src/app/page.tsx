@@ -16,10 +16,13 @@ import {
 import { analyzeGame } from "@/lib/analysis/game-analyzer";
 import { createBrowserStockfishEngine } from "@/lib/engine/stockfish-worker";
 import type { ChessEngine } from "@/lib/engine/engine-evaluator";
+import { formatEvalLabel } from "@/lib/engine/uci-parser";
+import { computeCapturedMaterial } from "@/lib/chess/material";
 import { COACH_PERSONAS, CoachPersonaId } from "@/lib/ai/coach-personas";
 import { SAMPLE_GAMES } from "@/lib/sample-games";
 import { getActiveMove, useReviewStore } from "@/lib/store/useReviewStore";
 import { Chessboard, BoardThemeId } from "@/components/chess/Chessboard";
+import { ChessPieceSvg } from "@/components/chess/ChessPieces";
 import type { BoardArrow } from "@/components/chess/BoardOverlays";
 import { EvalBar } from "@/components/chess/EvalBar";
 import { EvalGraph } from "@/components/chess/EvalGraph";
@@ -59,6 +62,7 @@ export default function GameReviewPage() {
     boardFlipped,
     showBestMove,
     bestMovePreviewIndex,
+    coachColor,
     personaId,
     explanations,
     storyline,
@@ -67,6 +71,7 @@ export default function GameReviewPage() {
     setAnalyzing,
     setAnalysisError,
     setAnalysis,
+    setCoachColor,
     setPersonaId,
     setExplanation,
     setStoryline,
@@ -88,6 +93,7 @@ export default function GameReviewPage() {
   const [showLoaderModal, setShowLoaderModal] = useState(false);
   const [importerTab, setImporterTab] = useState<ImporterTab>("samples");
   const [depth, setDepth] = useState<number>(14);
+  const [analyzedDepth, setAnalyzedDepth] = useState<number>(14);
   const [boardTheme, setBoardTheme] = useState<BoardThemeId>("green");
   const [analysisRunId, setAnalysisRunId] = useState(0);
   const [failedExplainPlies, setFailedExplainPlies] = useState<Record<string, boolean>>({});
@@ -97,7 +103,7 @@ export default function GameReviewPage() {
   const abortRef = useRef<AbortController | null>(null);
 
   const runAnalysis = useCallback(
-    async (pgn: string, autoFlipColor?: "white" | "black") => {
+    async (pgn: string, autoFlipColor?: "white" | "black" | "preserve") => {
       abortRef.current?.abort();
       engineRef.current?.dispose();
 
@@ -107,21 +113,25 @@ export default function GameReviewPage() {
       engineRef.current = engine;
 
       const normalizedPgn = normalizeInputToPgn(pgn);
+      const runDepth = depth;
       setAnalysisRunId((n) => n + 1);
       setFailedExplainPlies({});
       setPgnInput(normalizedPgn);
       setShowLoaderModal(false);
       setAnalyzing(0, 1);
 
-      if (autoFlipColor === "black" && !useReviewStore.getState().boardFlipped) {
-        flipBoard();
-      } else if (autoFlipColor !== "black" && useReviewStore.getState().boardFlipped) {
-        flipBoard();
+      if (autoFlipColor !== "preserve") {
+        setCoachColor(autoFlipColor ?? "white");
+        if (autoFlipColor === "black" && !useReviewStore.getState().boardFlipped) {
+          flipBoard();
+        } else if (autoFlipColor !== "black" && useReviewStore.getState().boardFlipped) {
+          flipBoard();
+        }
       }
 
       try {
         const result = await analyzeGame(normalizedPgn, engine, {
-          depth,
+          depth: runDepth,
           multiPv: 3,
           signal: controller.signal,
           onProgress: (completed, total) => {
@@ -132,6 +142,7 @@ export default function GameReviewPage() {
         });
 
         if (controller.signal.aborted) return;
+        setAnalyzedDepth(runDepth);
         setAnalysis(result);
       } catch (err) {
         if (controller.signal.aborted || (err as Error)?.name === "AbortError") return;
@@ -144,10 +155,10 @@ export default function GameReviewPage() {
         }
       }
     },
-    [depth, flipBoard, setAnalysis, setAnalysisError, setAnalyzing, setPgnInput]
+    [depth, flipBoard, setAnalysis, setAnalysisError, setAnalyzing, setCoachColor, setPgnInput]
   );
 
-  // Fetch / re-fetch grounded Game Storyline when analysis finishes or persona changes
+  // Fetch / re-fetch grounded Game Storyline when analysis finishes, coachColor toggles, or persona changes
   useEffect(() => {
     if (!analysis || analysisStatus !== "complete" || storyline) return;
 
@@ -169,6 +180,7 @@ export default function GameReviewPage() {
           blackAccuracy: analysis.summary.black.accuracy,
           whiteElo: analysis.summary.white.estimatedElo,
           blackElo: analysis.summary.black.estimatedElo,
+          coachFor: coachColor === "black" ? "Black" : "White",
           phaseAccuracies: {
             opening: {
               white: analysis.summary.white.phaseAccuracies.opening,
@@ -181,6 +193,20 @@ export default function GameReviewPage() {
             endgame: {
               white: analysis.summary.white.phaseAccuracies.endgame,
               black: analysis.summary.black.phaseAccuracies.endgame,
+            },
+          },
+          phaseMoveCounts: {
+            opening: {
+              white: analysis.summary.white.phaseMoveCounts?.opening ?? 0,
+              black: analysis.summary.black.phaseMoveCounts?.opening ?? 0,
+            },
+            middlegame: {
+              white: analysis.summary.white.phaseMoveCounts?.middlegame ?? 0,
+              black: analysis.summary.black.phaseMoveCounts?.middlegame ?? 0,
+            },
+            endgame: {
+              white: analysis.summary.white.phaseMoveCounts?.endgame ?? 0,
+              black: analysis.summary.black.phaseMoveCounts?.endgame ?? 0,
             },
           },
           keyMomentCount: analysis.moves.filter((m) => m.classification.isKeyMoment).length,
@@ -202,7 +228,7 @@ export default function GameReviewPage() {
     return () => {
       controller.abort();
     };
-  }, [analysis, analysisStatus, personaId, setStoryline, storyline]);
+  }, [analysis, analysisStatus, coachColor, personaId, setStoryline, storyline]);
 
   // Auto-load Opera Game on initial mount if idle
   useEffect(() => {
@@ -251,16 +277,19 @@ export default function GameReviewPage() {
   );
 
   const explainKey = activeMove
-    ? `${analysisRunId}:${personaId}:${activeMove.ply}`
+    ? `${analysisRunId}:${coachColor}:${personaId}:${activeMove.ply}`
     : null;
 
-  // Fetch grounded coach explanation lazily when navigating to a ply
+  // Fetch grounded coach explanation lazily when navigating to a ply or switching coachColor
   useEffect(() => {
     if (!analysis || !activeMove || !explainKey) return;
     if (explanations[activeMove.ply] || failedExplainPlies[explainKey]) return;
 
     const prevMoveObj =
       activeMove.ply >= 2 ? analysis.moves[activeMove.ply - 2] : undefined;
+    const whitePlayerName = analysis.headers.White || "White";
+    const blackPlayerName = analysis.headers.Black || "Black";
+    const coachFor: "White" | "Black" = coachColor === "black" ? "Black" : "White";
 
     const controller = new AbortController();
 
@@ -273,6 +302,9 @@ export default function GameReviewPage() {
         payload: {
           moveSan: activeMove.san,
           playedBy: activeMove.color === "w" ? "White" : "Black",
+          coachFor,
+          playerName: coachFor === "White" ? whitePlayerName : blackPlayerName,
+          opponentName: coachFor === "White" ? blackPlayerName : whitePlayerName,
           moveNumber: activeMove.moveNumber,
           badge: activeMove.classification.badge,
           openingName: analysis.opening.opening?.name,
@@ -281,7 +313,7 @@ export default function GameReviewPage() {
           deltaWP: activeMove.classification.deltaWP,
           engineBestMove: activeMove.bestMoveSan,
           bestMovePV: activeMove.bestMovePvSan,
-          refutationPV: activeMove.altPvSan,
+          refutationPV: activeMove.refutationPvSan ?? [],
           tacticalContext: activeMove.tacticalContext,
           personaId,
           fenBefore: activeMove.fenBefore,
@@ -307,7 +339,7 @@ export default function GameReviewPage() {
     return () => {
       controller.abort();
     };
-  }, [activeMove, analysis, explainKey, explanations, failedExplainPlies, personaId, setExplanation]);
+  }, [activeMove, analysis, coachColor, explainKey, explanations, failedExplainPlies, personaId, setExplanation]);
 
   // Compute displayed FEN, move highlight, badge, and arrows
   const boardView = useMemo(() => {
@@ -398,6 +430,29 @@ export default function GameReviewPage() {
   const whiteEloHeader = analysis?.headers.WhiteElo;
   const blackEloHeader = analysis?.headers.BlackElo;
   const hasKeyMoments = Boolean(analysis?.moves.some((m) => m.classification.isKeyMoment));
+  const materialSummary = useMemo(
+    () => computeCapturedMaterial(boardView.fen, analysis?.startFen),
+    [boardView.fen, analysis?.startFen]
+  );
+
+  const renderCapturedStrip = (sideIsWhite: boolean) => {
+    const pieces = sideIsWhite ? materialSummary.whiteCaptured : materialSummary.blackCaptured;
+    const adv = sideIsWhite ? materialSummary.whiteAdvantage : materialSummary.blackAdvantage;
+    if (pieces.length === 0 && adv <= 0) return null;
+    return (
+      <div className="flex items-center gap-1 text-[10px] font-bold text-[#c9c7c3]">
+        <div className="flex items-center -space-x-1">
+          {pieces.slice(0, 8).map((p, idx) => (
+            <span key={`${p.type}-${idx}`} className="h-3.5 w-3.5 inline-block">
+              <ChessPieceSvg color={p.color} type={p.type} />
+            </span>
+          ))}
+          {pieces.length > 8 && <span className="pl-1 text-[9px]">+{pieces.length - 8}</span>}
+        </div>
+        {adv > 0 && <span className="rounded bg-[#312e2b] px-1 text-[#96bc4b]">+{adv}</span>}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-[#312e2b] text-white">
@@ -434,6 +489,15 @@ export default function GameReviewPage() {
                 <option value={18} className="bg-[#21201d]">18 (Deep)</option>
               </select>
             </label>
+            {analysis && analysisStatus === "complete" && depth !== analyzedDepth && pgnInput && (
+              <button
+                type="button"
+                onClick={() => runAnalysis(pgnInput, "preserve")}
+                className="animate-coach-enter rounded border border-[#96bc4b]/60 bg-[#96bc4b]/15 px-2.5 py-1.5 text-xs font-bold text-[#96bc4b] transition hover:bg-[#96bc4b]/25"
+              >
+                Re-analyze ({depth})
+              </button>
+            )}
 
             {/* Coach Persona */}
             <label className="flex items-center gap-1.5 rounded border border-[#3d3b38] bg-[#21201d] px-2.5 py-1.5 text-xs text-[#c9c7c3]">
@@ -480,29 +544,30 @@ export default function GameReviewPage() {
       </header>
 
       {/* Main Two-Column Chess.com Workspace */}
-      <main className="mx-auto grid max-w-[1320px] grid-cols-1 gap-5 p-4 lg:grid-cols-[minmax(0,1fr)_440px] lg:items-start">
+      <main className="mx-auto grid max-w-[1320px] grid-cols-1 gap-4 p-3 sm:p-4 lg:grid-cols-[minmax(0,1fr)_440px] lg:grid-rows-[minmax(0,1fr)_auto] lg:items-start lg:gap-x-5 lg:gap-y-3">
         {/* Left/Center Column: Eval Bar + Player Bars + Chessboard */}
-        <section className="flex flex-col items-center">
+        <section className="order-1 flex flex-col items-center lg:col-start-1 lg:row-span-2 lg:row-start-1">
           <div className="w-full max-w-[640px]">
             {/* Top Player Plate */}
-            <div className="mb-2 flex items-center justify-between rounded bg-[#262522] px-3 py-1.5 text-xs">
-              <div className="flex items-center gap-2">
+            <div className="mb-2 flex items-center justify-between gap-2 rounded bg-[#262522] px-3 py-1.5 text-xs">
+              <div className="flex min-w-0 items-center gap-2">
                 <span
-                  className={`h-3 w-3 rounded-sm border border-[#524f4b] ${
+                  className={`h-3 w-3 shrink-0 rounded-sm border border-[#524f4b] ${
                     boardFlipped ? "bg-white" : "bg-[#191816]"
                   }`}
                 />
-                <span className="font-bold text-white">
+                <span className="truncate font-bold text-white">
                   {boardFlipped ? whiteName : blackName}
                 </span>
                 {(boardFlipped ? whiteEloHeader : blackEloHeader) && (
-                  <span className="text-[#9e9c98]">
+                  <span className="shrink-0 text-[#9e9c98]">
                     ({boardFlipped ? whiteEloHeader : blackEloHeader})
                   </span>
                 )}
+                {renderCapturedStrip(boardFlipped)}
               </div>
               {analysis && (
-                <span className="rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
+                <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
                   CAPS2:{" "}
                   {(boardFlipped
                     ? analysis.summary.white.accuracy
@@ -515,7 +580,7 @@ export default function GameReviewPage() {
 
             {/* Eval Bar + Interactive 8x8 Board */}
             <div className="flex items-stretch gap-2.5">
-              <div className="w-7 self-stretch">
+              <div className="w-6 shrink-0 self-stretch sm:w-7">
                 <EvalBar
                   whiteCp={boardView.whiteCp}
                   whiteMate={boardView.whiteMate}
@@ -542,24 +607,25 @@ export default function GameReviewPage() {
             </div>
 
             {/* Bottom Player Plate */}
-            <div className="mt-2 flex items-center justify-between rounded bg-[#262522] px-3 py-1.5 text-xs">
-              <div className="flex items-center gap-2">
+            <div className="mt-2 flex items-center justify-between gap-2 rounded bg-[#262522] px-3 py-1.5 text-xs">
+              <div className="flex min-w-0 items-center gap-2">
                 <span
-                  className={`h-3 w-3 rounded-sm border border-[#524f4b] ${
+                  className={`h-3 w-3 shrink-0 rounded-sm border border-[#524f4b] ${
                     boardFlipped ? "bg-[#191816]" : "bg-white"
                   }`}
                 />
-                <span className="font-bold text-white">
+                <span className="truncate font-bold text-white">
                   {boardFlipped ? blackName : whiteName}
                 </span>
                 {(boardFlipped ? blackEloHeader : whiteEloHeader) && (
-                  <span className="text-[#9e9c98]">
+                  <span className="shrink-0 text-[#9e9c98]">
                     ({boardFlipped ? blackEloHeader : whiteEloHeader})
                   </span>
                 )}
+                {renderCapturedStrip(!boardFlipped)}
               </div>
               {analysis && (
-                <span className="rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
+                <span className="shrink-0 rounded bg-[#312e2b] px-2 py-0.5 font-mono text-[11px] font-bold text-[#c9c7c3]">
                   CAPS2:{" "}
                   {(boardFlipped
                     ? analysis.summary.black.accuracy
@@ -572,8 +638,8 @@ export default function GameReviewPage() {
           </div>
         </section>
 
-        {/* Right Sidebar: Review / Analysis / Moves */}
-        <aside className="flex flex-col gap-3 rounded-lg border border-[#3d3b38] bg-[#262522] p-3 shadow-2xl">
+        {/* Right Sidebar Scrollable Workspace */}
+        <aside className="order-3 flex min-w-0 flex-col gap-3 rounded-lg border border-[#3d3b38] bg-[#262522] p-3 shadow-2xl lg:col-start-2 lg:row-start-1 lg:max-h-[calc(100vh-11.25rem)] lg:overflow-hidden">
           {/* Progress / Error Banner */}
           {analysisStatus === "analyzing" && (
             <div className="rounded border border-[#96bc4b]/40 bg-[#21201d] p-3">
@@ -630,87 +696,138 @@ export default function GameReviewPage() {
           </div>
 
           {analysis && (
-            <>
+            <div className="min-h-0 flex-1 space-y-3 lg:overflow-y-auto lg:pr-1">
               {sidebarTab === "review" && (
-                <div className="space-y-3">
-                  <AccuracyHeader
-                    whiteName={whiteName}
-                    blackName={blackName}
-                    whiteEloHeader={whiteEloHeader}
-                    blackEloHeader={blackEloHeader}
-                    summary={analysis.summary}
-                  />
+                <div className="flex flex-col gap-3">
+                  <div className="order-2 lg:order-1">
+                    <AccuracyHeader
+                      whiteName={whiteName}
+                      blackName={blackName}
+                      whiteEloHeader={whiteEloHeader}
+                      blackEloHeader={blackEloHeader}
+                      summary={analysis.summary}
+                      coachColor={coachColor}
+                      onSelectCoachColor={setCoachColor}
+                    />
+                  </div>
 
-                  <CoachCard
-                    personaId={personaId}
-                    moveNumber={activeMove?.moveNumber}
-                    playedBy={activeMove ? (activeMove.color === "w" ? "White" : "Black") : undefined}
-                    moveSan={activeMove?.san}
-                    badge={activeMove?.classification.badge}
-                    evalLabel={activeMove?.evalLabel}
-                    bestMoveSan={activeMove?.bestMoveSan}
-                    bestMovePvSan={activeMove?.bestMovePvSan}
-                    explanation={activeMove ? explanations[activeMove.ply] : null}
-                    storyline={storyline}
-                    openingLabel={
-                      analysis.opening.opening
-                        ? `[${analysis.opening.opening.eco}] ${analysis.opening.opening.name}`
-                        : undefined
-                    }
-                    openingInsight={analysis.opening.insight}
-                    retryState={retryState}
-                    showBestMove={showBestMove}
-                    bestMovePreviewIndex={bestMovePreviewIndex}
-                    loadingExplanation={Boolean(
-                      activeMove && explainKey && !explanations[activeMove.ply] && !failedExplainPlies[explainKey]
-                    )}
-                    onStartRetry={startRetryMode}
-                    onExitRetry={exitRetryMode}
-                    onToggleBestMove={toggleShowBestMove}
-                    onStepBestMove={stepBestMoveLine}
-                  />
+                  <div className="order-1 lg:order-2">
+                    <CoachCard
+                      personaId={personaId}
+                      coachColor={coachColor}
+                      onChangeCoachColor={setCoachColor}
+                      moveNumber={activeMove?.moveNumber}
+                      playedBy={activeMove ? (activeMove.color === "w" ? "White" : "Black") : undefined}
+                      moveSan={activeMove?.san}
+                      badge={activeMove?.classification.badge}
+                      evalLabel={activeMove?.evalLabel}
+                      bestMoveSan={activeMove?.bestMoveSan}
+                      bestMovePvSan={activeMove?.bestMovePvSan}
+                      explanation={activeMove ? explanations[activeMove.ply] : null}
+                      storyline={storyline}
+                      openingLabel={
+                        analysis.opening.opening
+                          ? `[${analysis.opening.opening.eco}] ${analysis.opening.opening.name}`
+                          : undefined
+                      }
+                      openingInsight={analysis.opening.insight}
+                      retryState={retryState}
+                      showBestMove={showBestMove}
+                      bestMovePreviewIndex={bestMovePreviewIndex}
+                      loadingExplanation={Boolean(
+                        activeMove && explainKey && !explanations[activeMove.ply] && !failedExplainPlies[explainKey]
+                      )}
+                      onStartRetry={startRetryMode}
+                      onExitRetry={exitRetryMode}
+                      onToggleBestMove={toggleShowBestMove}
+                      onStepBestMove={stepBestMoveLine}
+                    />
+                  </div>
 
-                  <EvalGraph
-                    moves={analysis.moves}
-                    currentPly={currentPly}
-                    startEval={analysis.startEval}
-                    onSelectPly={jumpToPly}
-                  />
+                  <div className="order-3">
+                    <EvalGraph
+                      moves={analysis.moves}
+                      currentPly={currentPly}
+                      startEval={analysis.startEval}
+                      onSelectPly={jumpToPly}
+                    />
+                  </div>
 
-                  <MoveBadgeSummary summary={analysis.summary} />
+                  <div className="order-4">
+                    <MoveBadgeSummary summary={analysis.summary} />
+                  </div>
                 </div>
               )}
 
               {sidebarTab === "analysis" && (
                 <div className="space-y-3">
                   <div className="rounded-md border border-[#3d3b38] bg-[#21201d] p-3">
-                    <div className="text-[11px] font-semibold uppercase tracking-wider text-[#9e9c98]">
-                      Engine Lines (MultiPV = 3)
+                    <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-[#9e9c98]">
+                      <span>Engine Lines (MultiPV = 3)</span>
+                      <span className="font-mono text-[10px]">Depth {analyzedDepth}</span>
                     </div>
-                    {activeMove ? (
-                      <div className="mt-2 space-y-2 text-xs">
-                        <div className="rounded bg-[#262522] p-2">
-                          <div className="font-bold text-[#96bc4b]">
-                            PV1 (Best): {activeMove.bestMoveSan}
+                    {(() => {
+                      const pvLines = activeMove?.pvLines ?? analysis.startEval?.pvLines ?? [];
+                      if (pvLines.length > 0) {
+                        return (
+                          <div className="mt-2 space-y-2 text-xs">
+                            {pvLines.slice(0, 3).map((line, i) => {
+                              const label = formatEvalLabel(line.cp, line.mate);
+                              const colorClass =
+                                i === 0
+                                  ? "text-[#96bc4b]"
+                                  : i === 1
+                                  ? "text-[#5c8bb0]"
+                                  : "text-[#a88a68]";
+                              return (
+                                <div key={line.multipv} className="rounded bg-[#262522] p-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className={`font-bold ${colorClass}`}>
+                                      PV{line.multipv}{" "}
+                                      {i === 0 ? "(Best)" : i === 1 ? "(2nd)" : "(3rd)"}:{" "}
+                                      {line.pvSan[0] || "—"}
+                                    </span>
+                                    <span className="rounded bg-[#312e2b] px-1.5 py-0.5 font-mono text-[11px] font-bold text-white">
+                                      {label}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 font-mono text-[11px] text-[#c9c7c3]">
+                                    {line.pvSan.slice(0, 6).join(" ")}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
-                          <div className="mt-1 font-mono text-[11px] text-[#c9c7c3]">
-                            {activeMove.bestMovePvSan.slice(0, 6).join(" ")}
-                          </div>
-                        </div>
-                        {activeMove.altPvSan.length > 0 && (
-                          <div className="rounded bg-[#262522] p-2">
-                            <div className="font-bold text-[#5c8bb0]">PV2 (Alternative)</div>
-                            <div className="mt-1 font-mono text-[11px] text-[#c9c7c3]">
-                              {activeMove.altPvSan.slice(0, 6).join(" ")}
+                        );
+                      }
+                      if (activeMove) {
+                        return (
+                          <div className="mt-2 space-y-2 text-xs">
+                            <div className="rounded bg-[#262522] p-2">
+                              <div className="font-bold text-[#96bc4b]">
+                                PV1 (Best): {activeMove.bestMoveSan}
+                              </div>
+                              <div className="mt-1 font-mono text-[11px] text-[#c9c7c3]">
+                                {activeMove.bestMovePvSan.slice(0, 6).join(" ")}
+                              </div>
                             </div>
+                            {activeMove.altPvSan.length > 0 && (
+                              <div className="rounded bg-[#262522] p-2">
+                                <div className="font-bold text-[#5c8bb0]">PV2 (Alternative)</div>
+                                <div className="mt-1 font-mono text-[11px] text-[#c9c7c3]">
+                                  {activeMove.altPvSan.slice(0, 6).join(" ")}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    ) : (
-                      <p className="mt-2 text-xs text-[#9e9c98]">
-                        Step to any move to inspect Stockfish principal variations.
-                      </p>
-                    )}
+                        );
+                      }
+                      return (
+                        <p className="mt-2 text-xs text-[#9e9c98]">
+                          Step to any move to inspect Stockfish principal variations.
+                        </p>
+                      );
+                    })()}
                   </div>
 
                   {activeMove && (
@@ -745,6 +862,7 @@ export default function GameReviewPage() {
                   <EvalGraph
                     moves={analysis.moves}
                     currentPly={currentPly}
+                    startEval={analysis.startEval}
                     onSelectPly={jumpToPly}
                   />
                 </div>
@@ -758,28 +876,38 @@ export default function GameReviewPage() {
                   onSelectPly={jumpToPly}
                 />
               )}
-
-              {/* Persistent Navigation Footer */}
-              <NavigationBar
-                currentPly={currentPly}
-                totalPlies={analysis.moves.length}
-                hasKeyMoments={hasKeyMoments}
-                onStart={goToStart}
-                onPrev={prevMove}
-                onNextKeyMoment={nextKeyMoment}
-                onNext={nextMove}
-                onEnd={goToEnd}
-                onFlip={flipBoard}
-              />
-            </>
+            </div>
           )}
         </aside>
+
+        {/* Persistent Navigation Bar: right below board on mobile, pinned below sidebar on desktop */}
+        {analysis && (
+          <div className="order-2 rounded-lg border border-[#3d3b38] bg-[#262522] p-2.5 shadow-xl lg:col-start-2 lg:row-start-2">
+            <NavigationBar
+              currentPly={currentPly}
+              totalPlies={analysis.moves.length}
+              hasKeyMoments={hasKeyMoments}
+              onStart={goToStart}
+              onPrev={prevMove}
+              onNextKeyMoment={nextKeyMoment}
+              onNext={nextMove}
+              onEnd={goToEnd}
+              onFlip={flipBoard}
+            />
+          </div>
+        )}
       </main>
 
-      {/* Game Loader Modal (Chess.com Username, Master Samples, Custom PGN) */}
-      {showLoaderModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-lg rounded-lg border border-[#3d3b38] bg-[#262522] p-4 shadow-2xl">
+      {/* Game Loader Modal (stays mounted so UsernameImporter retains cached results across close/reopen) */}
+      <div
+        className={
+          showLoaderModal
+            ? "fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+            : "hidden"
+        }
+        aria-hidden={!showLoaderModal}
+      >
+        <div className="animate-modal-enter w-full max-w-lg rounded-lg border border-[#3d3b38] bg-[#262522] p-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-[#3d3b38] pb-3">
               <h2 className="text-base font-extrabold text-white">Load Game for Review</h2>
               <button
@@ -843,11 +971,11 @@ export default function GameReviewPage() {
                 </div>
               )}
 
-              {importerTab === "chesscom" && (
+              <div className={importerTab === "chesscom" ? "" : "hidden"}>
                 <UsernameImporter
                   onSelectGame={(pgn, meta) => runAnalysis(pgn, meta?.userColor)}
                 />
-              )}
+              </div>
 
               {importerTab === "pgn" && (
                 <div className="space-y-3">
@@ -871,8 +999,7 @@ export default function GameReviewPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -2,7 +2,7 @@
 import React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import { EvalGraph } from "@/components/chess/EvalGraph";
+import { EvalGraph, computeEvalZeroOffset } from "@/components/chess/EvalGraph";
 import type { AnalyzedMove } from "@/lib/analysis/game-analyzer";
 
 vi.mock("recharts", () => {
@@ -105,5 +105,14 @@ describe("EvalGraph interactive timeline (Recharts v3)", () => {
     onSelectPly.mockClear();
     fireEvent.click(screen.getByTestId("mock-chart-null-click"));
     expect(onSelectPly).not.toHaveBeenCalled();
+  });
+
+  it("computes dynamic SVG zero-offset percentage from asymmetric evaluation ranges", () => {
+    // Max +8, Min -2 => zero line sits 80% down from top (8 / 10 = 0.8)
+    expect(computeEvalZeroOffset([{ evalWhite: 8 }, { evalWhite: -2 }])).toBeCloseTo(0.8, 3);
+    // All positive => 1.0 (white gradient spans whole chart)
+    expect(computeEvalZeroOffset([{ evalWhite: 5 }, { evalWhite: 2 }])).toBe(1);
+    // All negative => 0.0 (dark gradient spans whole chart)
+    expect(computeEvalZeroOffset([{ evalWhite: -4 }, { evalWhite: -1 }])).toBe(0);
   });
 });

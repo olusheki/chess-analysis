@@ -29,6 +29,22 @@ interface ChartPoint {
   markerColor?: string;
 }
 
+export function computeEvalZeroOffset(
+  points: Array<{ evalPawns?: number; evalWhite?: number }>
+): number {
+  if (points.length === 0) return 0.5;
+  let maxVal = -Infinity;
+  let minVal = Infinity;
+  for (const p of points) {
+    const val = p.evalPawns ?? p.evalWhite ?? 0;
+    if (val > maxVal) maxVal = val;
+    if (val < minVal) minVal = val;
+  }
+  if (maxVal <= 0) return 0;
+  if (minVal >= 0) return 1;
+  return maxVal / (maxVal - minVal);
+}
+
 function clampEvalPawns(whiteCp: number, whiteMate?: number): number {
   if (whiteMate !== undefined && whiteMate !== 0) {
     return whiteMate > 0 ? 10 : -10;
@@ -88,6 +104,8 @@ export function EvalGraph({ moves, currentPly, startEval, onSelectPly }: EvalGra
 
   if (moves.length === 0) return null;
 
+  const zeroOffsetPct = `${(computeEvalZeroOffset(data) * 100).toFixed(2)}%`;
+
   return (
     <div className="rounded-md border border-[#3d3b38] bg-[#21201d] p-2.5">
       <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-[#9e9c98]">
@@ -115,8 +133,8 @@ export function EvalGraph({ moves, currentPly, startEval, onSelectPly }: EvalGra
             <defs>
               <linearGradient id="evalAdvantageSplit" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#ffffff" stopOpacity={0.9} />
-                <stop offset="50%" stopColor="#d4d4d4" stopOpacity={0.7} />
-                <stop offset="50%" stopColor="#4c4a46" stopOpacity={0.85} />
+                <stop offset={zeroOffsetPct} stopColor="#d4d4d4" stopOpacity={0.7} />
+                <stop offset={zeroOffsetPct} stopColor="#4c4a46" stopOpacity={0.85} />
                 <stop offset="100%" stopColor="#1b1a18" stopOpacity={0.95} />
               </linearGradient>
             </defs>

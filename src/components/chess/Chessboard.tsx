@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Chess, Square } from "chess.js";
 import type { MoveBadge } from "@/lib/analysis/move-classifier";
 import { ChessPieceSvg } from "./ChessPieces";
@@ -28,12 +28,7 @@ const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const RANKS = ["8", "7", "6", "5", "4", "3", "2", "1"];
 
 export function Chessboard(props: ChessboardProps) {
-  return (
-    <ChessboardSurface
-      key={`${props.fen}:${Boolean(props.interactive)}`}
-      {...props}
-    />
-  );
+  return <ChessboardSurface {...props} />;
 }
 
 function ChessboardSurface({
@@ -46,8 +41,19 @@ function ChessboardSurface({
   theme = "green",
   onMove,
 }: ChessboardProps) {
+  const interactionScope = `${fen}:${Boolean(interactive)}`;
+  const [prevScope, setPrevScope] = useState(interactionScope);
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [pendingPromo, setPendingPromo] = useState<{ from: Square; to: Square } | null>(null);
+
+  if (prevScope !== interactionScope) {
+    setPrevScope(interactionScope);
+    setSelectedSquare(null);
+    setPendingPromo(null);
+  }
+
+  const squareElsRef = useRef<Record<string, HTMLDivElement | null>>({});
+  const prevBoardRef = useRef<{ map: Record<string, string>; flipped: boolean } | null>(null);
 
   const chess = useMemo(() => {
     try {
@@ -56,6 +62,102 @@ function ChessboardSurface({
       return new Chess();
     }
   }, [fen]);
+
+  useLayoutEffect(() => {
+    const curMap: Record<string, string> = {};
+    for (const rank of RANKS) {
+      for (const file of FILES) {
+        const sq = `${file}${rank}` as Square;
+        const p = chess.get(sq);
+        if (p) curMap[sq] = `${p.color}${p.type}`;
+      }
+    }
+
+    const prev = prevBoardRef.current;
+    prevBoardRef.current = { map: curMap, flipped };
+    if (!prev || prev.flipped !== flipped) return;
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+
+    const removed = Object.entries(prev.map).filter(([sq, code]) => curMap[sq] !== code);
+    const added = Object.entries(curMap).filter(([sq, code]) => prev.map[sq] !== code);
+    if (added.length === 0) return;
+
+    // Pair moved pieces cleanly (exact code first, then forward/backward promotion)
+    if (added.length <= 2 && removed.length <= 2) {
+      const usedFrom = new Set<string>();
+      for (const [toSq, toCode] of added) {
+        let fromEntry = removed.find(([sq, code]) => !usedFrom.has(sq) && code === toCode);
+        if (!fromEntry) {
+          const isPromoDest = toSq[1] === "1" || toSq[1] === "8";
+          fromEntry = removed.find(([sq, code]) => {
+            if (usedFrom.has(sq) || code[0] !== toCode[0]) return false;
+            const isPromoOrigin = sq[1] === "1" || sq[1] === "8";
+            return (
+              (isPromoDest && code === `${toCode[0]}p`) ||
+              (isPromoOrigin && toCode === `${toCode[0]}p`)
+            );
+          });
+        }
+        if (!fromEntry) {
+          // Restored captured piece when stepping backward: gentle fade-in
+          const toEl = squareElsRef.current[toSq];
+          const pieceEl = toEl?.querySelector("[data-piece-node]") as HTMLElement | null;
+          if (pieceEl && typeof pieceEl.animate === "function") {
+            pieceEl.getAnimations?.().forEach((a) => a.cancel());
+            pieceEl.animate([{ opacity: 0.25 }, { opacity: 1 }], {
+              duration: 160,
+              easing: "ease-out",
+            });
+          }
+          continue;
+        }
+        usedFrom.add(fromEntry[0]);
+        const fromEl = squareElsRef.current[fromEntry[0]];
+        const toEl = squareElsRef.current[toSq];
+        const pieceEl = toEl?.querySelector("[data-piece-node]") as HTMLElement | null;
+        if (!fromEl || !toEl || !pieceEl || typeof pieceEl.animate !== "function") continue;
+        const fromRect = fromEl.getBoundingClientRect();
+        const toRect = toEl.getBoundingClientRect();
+        const dx = fromRect.left - toRect.left;
+        const dy = fromRect.top - toRect.top;
+        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+          pieceEl.getAnimations?.().forEach((a) => a.cancel());
+          pieceEl.animate(
+            [
+              { transform: `translate(${dx}px, ${dy}px) scale(1.06)`, zIndex: 40 },
+              { transform: "translate(0, 0) scale(1)", zIndex: 40 },
+            ],
+            { duration: 220, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }
+          );
+        }
+      }
+      return;
+    }
+
+    // Multi-ply jump settle
+    for (const [toSq] of added) {
+      const toEl = squareElsRef.current[toSq];
+      const pieceEl = toEl?.querySelector("[data-piece-node]") as HTMLElement | null;
+      if (pieceEl && typeof pieceEl.animate === "function") {
+        pieceEl.getAnimations?.().forEach((a) => a.cancel());
+        pieceEl.animate(
+          [
+            { opacity: 0.35, transform: "scale(0.92)" },
+            { opacity: 1, transform: "scale(1)" },
+          ],
+          {
+            duration: 180,
+            easing: "ease-out",
+          }
+        );
+      }
+    }
+  }, [chess, fen, flipped]);
 
   const legalTargets = useMemo(() => {
     if (!interactive || !selectedSquare) return new Set<Square>();
@@ -98,7 +200,10 @@ function ChessboardSurface({
 
   return (
     <div className="relative aspect-square w-full select-none overflow-visible rounded-[3px] shadow-xl">
-      <div className="grid h-full w-full grid-cols-8 grid-rows-8 overflow-hidden rounded-[3px]">
+      <div
+        data-testid="chessboard-grid"
+        className="grid h-full w-full grid-cols-8 grid-rows-8 overflow-hidden rounded-[3px]"
+      >
         {displayRanks.map((rank, rIdx) =>
           displayFiles.map((file, fIdx) => {
             const sq = `${file}${rank}` as Square;
@@ -119,6 +224,9 @@ function ChessboardSurface({
             return (
               <div
                 key={sq}
+                ref={(el) => {
+                  squareElsRef.current[sq] = el;
+                }}
                 data-testid={`square-${sq}`}
                 onClick={() => handleSquareClick(sq)}
                 className={`relative flex items-center justify-center ${
@@ -131,21 +239,21 @@ function ChessboardSurface({
                 {/* Previous Move / Selection Highlight */}
                 {(isStart || isSelected) && (
                   <div
-                    className="pointer-events-none absolute inset-0"
+                    className="pointer-events-none absolute inset-0 transition-opacity duration-150"
                     style={{ backgroundColor: "rgba(247, 247, 105, 0.45)" }}
                   />
                 )}
                 {isDest && (
                   <div
-                    className="pointer-events-none absolute inset-0"
+                    className="pointer-events-none absolute inset-0 transition-opacity duration-150"
                     style={{ backgroundColor: "rgba(247, 247, 105, 0.70)" }}
                   />
                 )}
 
-                {/* Algebraic Coordinates inside edge squares */}
+                {/* Algebraic Coordinates inside edge squares (scaled compactly on mobile so pieces stay clear) */}
                 {showRankCoord && (
                   <span
-                    className="pointer-events-none absolute left-1 top-0.5 text-[10px] font-bold leading-none"
+                    className="pointer-events-none absolute left-[2px] top-[1px] z-[6] text-[8px] font-bold leading-none sm:left-1 sm:top-0.5 sm:text-[10px]"
                     style={{ color: coordColor }}
                   >
                     {rank}
@@ -153,7 +261,7 @@ function ChessboardSurface({
                 )}
                 {showFileCoord && (
                   <span
-                    className="pointer-events-none absolute bottom-0.5 right-1 text-[10px] font-bold leading-none"
+                    className="pointer-events-none absolute bottom-[1px] right-[2px] z-[6] text-[8px] font-bold leading-none sm:bottom-0.5 sm:right-1 sm:text-[10px]"
                     style={{ color: coordColor }}
                   >
                     {file}
@@ -162,7 +270,10 @@ function ChessboardSurface({
 
                 {/* Legal target dot in interactive mode */}
                 {isLegalTarget && !piece && (
-                  <span className="pointer-events-none z-10 h-3.5 w-3.5 rounded-full bg-black/20" />
+                  <span
+                    data-testid={`legal-dot-${sq}`}
+                    className="pointer-events-none z-10 h-3.5 w-3.5 rounded-full bg-black/20"
+                  />
                 )}
                 {isLegalTarget && piece && (
                   <span className="pointer-events-none absolute inset-1 z-10 rounded-full border-[4px] border-black/25" />
@@ -170,7 +281,10 @@ function ChessboardSurface({
 
                 {/* Vector SVG Chess Piece */}
                 {piece && (
-                  <div className="relative z-[5] h-[86%] w-[86%] transition-transform duration-150">
+                  <div
+                    data-piece-node
+                    className="relative z-[5] h-full w-full p-[8%] sm:p-[7%]"
+                  >
                     <ChessPieceSvg color={piece.color} type={piece.type} />
                   </div>
                 )}
@@ -178,8 +292,9 @@ function ChessboardSurface({
                 {/* Destination Square Move Badge Pin */}
                 {isDest && badge && (
                   <div
+                    key={`${fen}:${badge}`}
                     data-testid="board-move-badge"
-                    className="pointer-events-none absolute -right-1 -top-1 z-20"
+                    className="animate-badge-pop pointer-events-none absolute -right-1 -top-1 z-20"
                   >
                     <MoveBadgeIcon badge={badge} size="md" />
                   </div>
