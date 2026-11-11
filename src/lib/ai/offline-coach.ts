@@ -5,6 +5,7 @@
  */
 
 import { MoveBadge } from "../analysis/move-classifier";
+import { ComparativeCoachInsights } from "../analysis/coach-insights";
 import { TacticalContext } from "../analysis/tactical-tagger";
 import { CoachPersonaId } from "./coach-personas";
 
@@ -24,6 +25,7 @@ export interface CoachExplanationRequest {
   bestMovePV: string[];
   refutationPV?: string[];
   tacticalContext: TacticalContext;
+  coachInsights?: ComparativeCoachInsights;
   personaId?: CoachPersonaId;
   fenBefore?: string;
   fenAfter?: string;

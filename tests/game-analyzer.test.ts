@@ -110,6 +110,15 @@ describe("game-analyzer (full Tier 1 + Tier 2 pipeline)", () => {
     expect(whiteMove.color).toBe("w");
     expect(whiteMove.san).toBe("O-O");
     expect(whiteMove.classification.badge).toBe("Miss");
+    expect(whiteMove.coachInsights?.bestMoveSan).toBe("Nxg5");
+    expect(
+      whiteMove.coachInsights?.whyBetterFacts.some((m) => /Nxg5/.test(m))
+    ).toBe(true);
+    expect(
+      whiteMove.coachInsights?.strategicTradeoffs.some((m) => /O-O/.test(m))
+    ).toBe(true);
+    expect(whiteMove.coachInsights?.bestPvIntentions?.lineSan).toEqual(["Nxg5"]);
+    expect(whiteMove.coachInsights?.boardPieceMapAfter).toContain("K g1");
 
     // Verify CAPS2 summary & badge counts
     expect(analysis.summary.black.badgeCounts.Blunder).toBe(1);

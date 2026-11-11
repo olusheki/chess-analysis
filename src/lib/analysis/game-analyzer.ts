@@ -14,6 +14,10 @@ import {
 import { classifyGameOpenings, GameOpeningAnalysis } from "./opening-book";
 import { calculateMaterialSacrifice, PIECE_VALUES, staticExchangeOnSquare } from "./sacrifice-detector";
 import { extractTacticalContext, TacticalContext } from "./tactical-tagger";
+import {
+  analyzeComparativeReasons,
+  ComparativeCoachInsights,
+} from "./coach-insights";
 
 export interface ParsedMove {
   ply: number; // 1-indexed
@@ -54,6 +58,7 @@ export interface AnalyzedMove extends ParsedMove {
   materialSacrificed: number;
   classification: ClassificationResult;
   tacticalContext: TacticalContext;
+  coachInsights?: ComparativeCoachInsights;
 }
 
 export interface PlayerSummary {
@@ -365,6 +370,19 @@ export async function analyzeGame(
       move.moveNumber
     );
 
+    const coachInsights = analyzeComparativeReasons({
+      fenBefore: move.fenBefore,
+      fenAfter: move.fenAfter,
+      playedSan: move.san,
+      bestMoveSan: evalBefore.bestMoveSan,
+      bestMovePvSan: bestLine?.pvSan ?? [],
+      refutationPvSan: evalAfter.lines[0]?.pvSan ?? [],
+      moveNumber: move.moveNumber,
+      isBook,
+      playedTactics: tacticalContext,
+      classification: classification.badge,
+    });
+
     prevDeltaWP = classification.deltaWP;
 
     analyzedMoves.push({
@@ -386,6 +404,7 @@ export async function analyzeGame(
       materialSacrificed,
       classification,
       tacticalContext,
+      coachInsights,
     });
   }
 
