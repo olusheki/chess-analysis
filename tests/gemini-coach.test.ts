@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Chess } from "chess.js";
 import { GeminiCoachService, validateExplanationGrounding } from "@/lib/ai/gemini-coach";
+import { describeTacticalFeatures, formatPhaseMetric } from "@/lib/ai/offline-coach";
 import { COACH_PERSONAS, getCoachPersona } from "@/lib/ai/coach-personas";
 import type { MoveBadge } from "@/lib/analysis/move-classifier";
 import type { TacticalContext } from "@/lib/analysis/tactical-tagger";
@@ -765,5 +766,836 @@ describe("gemini-coach & explainability grounding", () => {
     expect(sentPrompt).toContain("Comparative Chess Reasons");
     expect(sentPrompt).toContain("Future Intentions Along Best Line:");
     expect(sentPrompt).toContain("Grandmaster Sage");
+  });
+
+  it("ensures distinct offline prose & no empty strings across all 11 badges, opponent branches, tips, and storyline outcomes for all 3 personas", async () => {
+    const personas = ["danny", "sage", "drillmaster"] as const;
+    const scenarioBadges: Array<{
+      label: string;
+      badge: MoveBadge;
+      tags?: TacticalContext["tags"];
+      hanging?: { square: "e5"; piece: "Rook"; value: 5 };
+      expectAll3Unique?: boolean;
+    }> = [
+      { label: "hanging-blunder", badge: "Blunder", tags: ["HANGING_PIECE"], hanging: { square: "e5", piece: "Rook", value: 5 }, expectAll3Unique: true },
+      { label: "positional-blunder", badge: "Blunder", expectAll3Unique: true },
+      { label: "miss", badge: "Miss", expectAll3Unique: true },
+      { label: "mistake", badge: "Mistake", expectAll3Unique: true },
+      { label: "inaccuracy", badge: "Inaccuracy", expectAll3Unique: true },
+      { label: "brilliant", badge: "Brilliant", expectAll3Unique: true },
+      { label: "great", badge: "Great", expectAll3Unique: true },
+      { label: "best", badge: "Best", expectAll3Unique: true },
+      { label: "book", badge: "Book", expectAll3Unique: true },
+      { label: "forced", badge: "Forced", expectAll3Unique: true },
+      { label: "castle", badge: "Good", tags: ["KING_SAFETY_CASTLE"], expectAll3Unique: true },
+      { label: "dev", badge: "Excellent", tags: ["DEVELOPMENT"], expectAll3Unique: true },
+    ];
+
+    for (const sc of scenarioBadges) {
+      const results = await Promise.all(
+        personas.map((personaId) =>
+          coach.explainMove({
+            personaId,
+            moveSan: sc.badge === "Good" ? "O-O" : "Nf3",
+            playedBy: "White",
+            coachFor: "White",
+            moveNumber: 8,
+            badge: sc.badge,
+            evalBefore: "+0.3",
+            evalAfter: sc.badge === "Blunder" ? "-2.5" : "+0.4",
+            deltaWP: sc.badge === "Blunder" ? 30 : 5,
+            engineBestMove: "d4",
+            bestMovePV: ["d4", "d5"],
+            refutationPV: ["Bg4", "Be2"],
+            tacticalContext: makeContext({
+              tags: sc.tags ?? [],
+              hangingPieceDetails: sc.hanging,
+            }),
+          })
+        )
+      );
+      for (const res of results) {
+        expect(res.coachMode).toBe("offline");
+        expect(res.shortComment.trim().length).toBeGreaterThan(5);
+        expect(res.shortComment).not.toContain("undefined");
+        expect(res.detailedExplanation.trim().length).toBeGreaterThan(10);
+        if (res.bestMoveReasoning) {
+          expect(res.bestMoveReasoning).not.toContain("undefined");
+        }
+        if (res.coachingTip) {
+          expect(res.coachingTip.trim().length).toBeGreaterThan(10);
+        }
+      }
+      if (sc.expectAll3Unique) {
+        expect(new Set(results.map((r) => r.shortComment)).size).toBe(3);
+      }
+      if (
+        sc.badge === "Blunder" ||
+        sc.badge === "Best" ||
+        sc.badge === "Good" ||
+        sc.badge === "Excellent"
+      ) {
+        expect(new Set(results.map((r) => r.detailedExplanation)).size).toBe(3);
+      }
+      if (sc.badge === "Blunder" || sc.badge === "Mistake") {
+        expect(new Set(results.map((r) => r.coachingTip)).size).toBe(3);
+        expect(new Set(results.map((r) => r.bestMoveReasoning)).size).toBe(3);
+      }
+    }
+
+    // Same-san Good move does not produce redundant bestMoveReasoning
+    const sameGood = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "d4",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 12,
+      badge: "Good",
+      evalBefore: "+0.2",
+      evalAfter: "+0.2",
+      deltaWP: 0.5,
+      engineBestMove: "d4",
+      bestMovePV: ["d4", "d5"],
+      tacticalContext: makeContext(),
+    });
+    expect(sameGood.coachMode).toBe("offline");
+    expect(sameGood.bestMoveReasoning).toBeUndefined();
+
+    // Verify authentic persona signature voice closings & tips appear for all 3 coaches
+    const [dErr, sErr, bErr] = await Promise.all(
+      personas.map((personaId) =>
+        coach.explainMove({
+          personaId,
+          moveSan: "Qh5",
+          playedBy: "White",
+          coachFor: "White",
+          moveNumber: 9,
+          badge: "Blunder",
+          evalBefore: "+0.4",
+          evalAfter: "-3.0",
+          deltaWP: 38,
+          engineBestMove: "Nf3",
+          bestMovePV: ["Nf3"],
+          tacticalContext: makeContext(),
+        })
+      )
+    );
+    expect(dErr.detailedExplanation).toContain("tactical clue");
+    expect(sErr.detailedExplanation).toContain("long-term harmony");
+    expect(bErr.detailedExplanation).toContain("calculation discipline");
+    expect(dErr.coachingTip).toContain("blunder check");
+    expect(sErr.coachingTip).toContain("constructive post");
+    expect(bErr.coachingTip).toContain("Checklist every single ply");
+
+    const [dBest, sBest, bBest] = await Promise.all(
+      personas.map((personaId) =>
+        coach.explainMove({
+          personaId,
+          moveSan: "Nf3",
+          playedBy: "White",
+          coachFor: "White",
+          moveNumber: 3,
+          badge: "Best",
+          evalBefore: "+0.2",
+          evalAfter: "+0.4",
+          deltaWP: 0,
+          engineBestMove: "Nf3",
+          bestMovePV: ["Nf3"],
+          tacticalContext: makeContext(),
+        })
+      )
+    );
+    expect(dBest.detailedExplanation).toContain("army active");
+    expect(sBest.detailedExplanation).toContain("classical coordination");
+    expect(bBest.detailedExplanation).toContain("Clinical precision");
+
+    const [dOppSlip, sOppSlip, bOppSlip] = await Promise.all(
+      personas.map((personaId) =>
+        coach.explainMove({
+          personaId,
+          moveSan: "g5",
+          playedBy: "Black",
+          coachFor: "White",
+          opponentName: "Rival",
+          moveNumber: 6,
+          badge: "Blunder",
+          evalBefore: "+0.2",
+          evalAfter: "+3.5",
+          deltaWP: 35,
+          engineBestMove: "Nf6",
+          bestMovePV: ["Nf6"],
+          tacticalContext: makeContext(),
+        })
+      )
+    );
+    expect(dOppSlip.coachingTip).toContain("stumbles");
+    expect(sOppSlip.coachingTip).toContain("structural weaknesses");
+    expect(bOppSlip.coachingTip).toContain("Lock on immediately");
+
+    // Opponent branches across Book, Forced, Blunder, Miss, Mistake, Inaccuracy, Best, Good
+    for (const badge of [
+      "Book",
+      "Forced",
+      "Blunder",
+      "Miss",
+      "Mistake",
+      "Inaccuracy",
+      "Best",
+      "Good",
+    ] as const) {
+      const oppResults = await Promise.all(
+        personas.map((personaId) =>
+          coach.explainMove({
+            personaId,
+            moveSan: "Nc6",
+            playedBy: "Black",
+            coachFor: "White",
+            opponentName: "Rival",
+            openingName: "Italian Game",
+            moveNumber: 5,
+            badge,
+            evalBefore: "+0.2",
+            evalAfter: "+0.8",
+            deltaWP: 12,
+            engineBestMove: "d5",
+            bestMovePV: ["d5"],
+            refutationPV: ["Bb5"],
+            tacticalContext: makeContext(),
+          })
+        )
+      );
+      for (const r of oppResults) {
+        expect(r.coachMode).toBe("offline");
+        expect(r.shortComment.trim().length).toBeGreaterThan(5);
+        expect(r.detailedExplanation).not.toContain("undefined");
+      }
+      if (badge === "Blunder" || badge === "Miss") {
+        expect(new Set(oppResults.map((r) => r.coachingTip)).size).toBe(3);
+        expect(new Set(oppResults.map((r) => r.bestMoveReasoning)).size).toBe(3);
+      }
+      if (badge === "Book") {
+        expect(oppResults[0].detailedExplanation).toContain("Italian Game");
+      }
+      if (badge === "Forced") {
+        expect(oppResults[0].shortComment.toLowerCase()).toContain("only legal move");
+      }
+      if (badge === "Mistake" || badge === "Best" || badge === "Blunder") {
+        expect(new Set(oppResults.map((r) => r.shortComment)).size).toBe(3);
+      }
+    }
+
+    // Tailored tip branches (fork, develop, pawn structure)
+    for (const topic of [
+      "Nc7 forks the King and Rook",
+      "Develop minor pieces rather than O-O",
+      "Pawn structure shows isolated pawns",
+    ]) {
+      const tipResults = await Promise.all(
+        personas.map((personaId) =>
+          coach.explainMove({
+            personaId,
+            moveSan: "a3",
+            playedBy: "White",
+            coachFor: "White",
+            moveNumber: 6,
+            badge: "Mistake",
+            evalBefore: "+0.4",
+            evalAfter: "-0.7",
+            deltaWP: 14,
+            engineBestMove: "Nc3",
+            bestMovePV: ["Nc3"],
+            tacticalContext: makeContext(),
+            coachInsights: {
+              playedSan: "a3",
+              bestMoveSan: "Nc3",
+              whyBetterFacts: [topic],
+              strategicTradeoffs: [topic],
+              missedOpportunities: [topic],
+            },
+          })
+        )
+      );
+      for (const r of tipResults) {
+        expect(r.coachingTip?.trim().length).toBeGreaterThan(10);
+      }
+    }
+
+    // Storylines across 1-0, 0-1, 1/2-1/2 and both low (<85) & high (>=85) accuracy buckets
+    for (const outcome of [
+      { result: "1-0", wAcc: 92, bAcc: 72 },
+      { result: "0-1", wAcc: 74, bAcc: 91 },
+      { result: "1/2-1/2", wAcc: 86, bAcc: 86 },
+    ]) {
+      const stories = await Promise.all(
+        personas.map((personaId) =>
+          coach.generateGameStoryline({
+            personaId,
+            whiteName: "W",
+            blackName: "B",
+            result: outcome.result,
+            openingName: "Sicilian Defense",
+            whiteAccuracy: outcome.wAcc,
+            blackAccuracy: outcome.bAcc,
+            whiteElo: 1800,
+            blackElo: 1700,
+            phaseAccuracies: {
+              opening: { white: 90, black: 85 },
+              middlegame: { white: outcome.wAcc, black: outcome.bAcc },
+              endgame: { white: 88, black: 84 },
+            },
+            keyMomentCount: 3,
+          })
+        )
+      );
+      expect(new Set(stories.map((s) => s.headline)).size).toBe(3);
+      expect(new Set(stories.map((s) => s.whiteTakeaway)).size).toBe(3);
+      expect(new Set(stories.map((s) => s.blackTakeaway)).size).toBe(3);
+    }
+
+    // Exercise relative pins, PV-only fallback, no-refutation opponent copy, and Good punch-line diff
+    expect(formatPhaseMetric(82, 0)).toBe("N/A");
+    expect(formatPhaseMetric(82, 4)).toBe("82%");
+    expect(
+      describeTacticalFeatures(
+        makeContext({
+          tags: ["RELATIVE_PIN"],
+          pinnedPieceDetails: { square: "f6", piece: "Knight", pinnedTo: "Queen" },
+        })
+      )
+    ).toContain("pins the Knight on f6 against the Queen");
+
+    const pvOnlyRes = await coach.explainMove({
+      personaId: "sage",
+      moveSan: "h3",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 9,
+      badge: "Good",
+      evalBefore: "+0.2",
+      evalAfter: "+0.1",
+      deltaWP: 2,
+      engineBestMove: "d4",
+      bestMovePV: ["d4", "exd4"],
+      tacticalContext: makeContext(),
+      coachInsights: {
+        playedSan: "h3",
+        bestMoveSan: "d4",
+        whyBetterFacts: [],
+        strategicTradeoffs: [],
+        missedOpportunities: [],
+        bestPvIntentions: {
+          lineSan: ["d4", "exd4"],
+          checksDelivered: 0,
+          capturedTargets: [],
+          castled: false,
+          promoted: false,
+          terminalCheckmate: false,
+          summaryFacts: ["Line breaks open the center with tempo."],
+        },
+      },
+    });
+    expect(pvOnlyRes.detailedExplanation).toContain("breaks open the center");
+    expect(pvOnlyRes.bestMoveReasoning).toContain("d4");
+
+    const oppNoRef = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "e5",
+      playedBy: "Black",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 1,
+      badge: "Book",
+      evalBefore: "+0.2",
+      evalAfter: "+0.2",
+      deltaWP: 0,
+      engineBestMove: "e5",
+      bestMovePV: [],
+      refutationPV: [],
+      tacticalContext: makeContext(),
+    });
+    expect(oppNoRef.detailedExplanation).toContain("central development");
+
+    const goodWithPunch = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "h3",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 12,
+      badge: "Good",
+      evalBefore: "+0.3",
+      evalAfter: "+0.1",
+      deltaWP: 2.5,
+      engineBestMove: "d4",
+      bestMovePV: ["d4"],
+      tacticalContext: makeContext(),
+    });
+    expect(goodWithPunch.detailedExplanation).toContain("slightly more punch");
+    expect(goodWithPunch.bestMoveReasoning).toContain("d4");
+
+    const sameGoodVerified = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "d4",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 12,
+      badge: "Good",
+      evalBefore: "+0.2",
+      evalAfter: "+0.2",
+      deltaWP: 0.4,
+      engineBestMove: "d4",
+      bestMovePV: ["d4"],
+      tacticalContext: makeContext(),
+    });
+    expect(sameGoodVerified.shortComment).toContain("d4 is a good choice.");
+    expect(sameGoodVerified.detailedExplanation).toContain("A solid continuation holding +0.2.");
+    expect(sameGoodVerified.detailedExplanation).not.toContain("offered slightly more punch");
+    expect(sameGoodVerified.bestMoveReasoning).toBeUndefined();
+
+    expect(describeTacticalFeatures(makeContext({ tags: ["CENTER_CONTROL"] }), false, false)).toContain(
+      "contests key central squares."
+    );
+
+    const oppBlunderNoRef = await coach.explainMove({
+      personaId: "sage",
+      moveSan: "Qd5",
+      playedBy: "Black",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 14,
+      badge: "Blunder",
+      evalBefore: "+0.4",
+      evalAfter: "+4.2",
+      deltaWP: 32,
+      engineBestMove: "Nf6",
+      bestMovePV: [],
+      refutationPV: [],
+      tacticalContext: makeContext({
+        hangingPieceDetails: { piece: "Queen", square: "d5" },
+      }),
+      coachInsights: {
+        playedSan: "Qd5",
+        bestMoveSan: "Nf6",
+        whyBetterFacts: [],
+        strategicTradeoffs: [],
+        missedOpportunities: [],
+        refutationPvIntentions: {
+          lineSan: [],
+          checksDelivered: 1,
+          capturedTargets: [],
+          castled: false,
+          promoted: false,
+          terminalCheckmate: false,
+          summaryFacts: ["Line attacks the exposed queen."],
+        },
+      },
+    });
+    expect(oppBlunderNoRef.detailedExplanation).toContain("Queen on d5 is exposed");
+    expect(oppBlunderNoRef.detailedExplanation).toContain("checks, captures, and ways");
+    expect(oppBlunderNoRef.detailedExplanation).toContain("Line attacks the exposed queen.");
+
+    const oppMistakeInsight = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "h6",
+      playedBy: "Black",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 10,
+      badge: "Mistake",
+      evalBefore: "+0.3",
+      evalAfter: "+1.9",
+      deltaWP: 14,
+      engineBestMove: "Nc6",
+      bestMovePV: ["Nc6"],
+      refutationPV: [],
+      tacticalContext: makeContext(),
+      coachInsights: {
+        playedSan: "h6",
+        bestMoveSan: "Nc6",
+        whyBetterFacts: ["Nc6 challenges d4 directly."],
+        strategicTradeoffs: [],
+        missedOpportunities: ["Missed central counterplay."],
+      },
+    });
+    expect(oppMistakeInsight.bestMoveReasoning).toBeTruthy();
+
+    const oppForcedNoRef = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "Kh8",
+      playedBy: "Black",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 11,
+      badge: "Forced",
+      evalBefore: "+2.0",
+      evalAfter: "+2.0",
+      deltaWP: 0,
+      engineBestMove: "Kh8",
+      bestMovePV: [],
+      refutationPV: [],
+      tacticalContext: makeContext(),
+    });
+    expect(oppForcedNoRef.detailedExplanation).toBe("Rival had no other legal move than Kh8.");
+
+    const oppForcedWithRef = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "Kh8",
+      playedBy: "Black",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 11,
+      badge: "Forced",
+      evalBefore: "+2.0",
+      evalAfter: "+2.3",
+      deltaWP: 1,
+      engineBestMove: "Kh8",
+      bestMovePV: [],
+      refutationPV: ["Nf3", "Nc6"],
+      tacticalContext: makeContext(),
+    });
+    expect(oppForcedWithRef.detailedExplanation).toContain("Nf3");
+
+    const oppBestNoRef = await coach.explainMove({
+      personaId: "drillmaster",
+      moveSan: "Nd4",
+      playedBy: "Black",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 13,
+      badge: "Best",
+      evalBefore: "+0.1",
+      evalAfter: "-0.3",
+      deltaWP: 2,
+      engineBestMove: "Nd4",
+      bestMovePV: [],
+      refutationPV: [],
+      tacticalContext: makeContext(),
+      coachInsights: {
+        playedSan: "Nd4",
+        bestMoveSan: "Nd4",
+        whyBetterFacts: [],
+        strategicTradeoffs: [],
+        missedOpportunities: [],
+        bestPvIntentions: {
+          lineSan: ["Nd4"],
+          checksDelivered: 0,
+          capturedTargets: [],
+          castled: false,
+          promoted: false,
+          terminalCheckmate: false,
+          summaryFacts: ["Knight clamps down on central outposts."],
+        },
+      },
+    });
+    expect(oppBestNoRef.detailedExplanation).toContain("Prioritize king safety and defend key squares.");
+    expect(oppBestNoRef.detailedExplanation).toContain("Knight clamps down on central outposts.");
+
+    const oppGoodThreat = await coach.explainMove({
+      personaId: "sage",
+      moveSan: "Nb4",
+      playedBy: "Black",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 15,
+      badge: "Good",
+      evalBefore: "0.0",
+      evalAfter: "-0.2",
+      deltaWP: 1.2,
+      engineBestMove: "c5",
+      bestMovePV: [],
+      refutationPV: [],
+      tacticalContext: makeContext({
+        tags: ["TACTICAL_FORK"],
+        forkTargets: ["King on e1", "Rook on a1"],
+      }),
+    });
+    expect(oppGoodThreat.detailedExplanation).toContain("Threat check:");
+
+    const playerBlunderHangingNoRef = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "Qa4",
+      playedBy: "White",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 16,
+      badge: "Blunder",
+      evalBefore: "+0.5",
+      evalAfter: "-4.5",
+      deltaWP: 38,
+      engineBestMove: "Nf3",
+      bestMovePV: ["Nf3"],
+      refutationPV: [],
+      tacticalContext: makeContext({
+        hangingPieceDetails: { piece: "Queen", square: "a4" },
+      }),
+      coachInsights: {
+        playedSan: "Qa4",
+        bestMoveSan: "Nf3",
+        whyBetterFacts: ["Nf3 develops with tempo toward e5."],
+        strategicTradeoffs: [],
+        missedOpportunities: [],
+        bestPvIntentions: {
+          lineSan: ["Nf3"],
+          checksDelivered: 0,
+          capturedTargets: [],
+          castled: false,
+          promoted: false,
+          terminalCheckmate: false,
+          summaryFacts: ["Prepares rapid O-O."],
+        },
+      },
+    });
+    expect(playerBlunderHangingNoRef.detailedExplanation).toContain("can exploit this immediately");
+    expect(playerBlunderHangingNoRef.detailedExplanation).toContain("Why Nf3 outperformed:");
+    expect(playerBlunderHangingNoRef.bestMoveReasoning).toContain("Prepares rapid O-O.");
+
+    const playerBlunderPlainNoRef = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "g4",
+      playedBy: "White",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 17,
+      badge: "Blunder",
+      evalBefore: "+0.2",
+      evalAfter: "-3.1",
+      deltaWP: 30,
+      engineBestMove: "Nf3",
+      bestMovePV: ["Nf3"],
+      refutationPV: [],
+      tacticalContext: makeContext(),
+      coachInsights: {
+        playedSan: "g4",
+        bestMoveSan: "Nf3",
+        whyBetterFacts: [],
+        strategicTradeoffs: ["Exposes kingside dark squares."],
+        missedOpportunities: [],
+        refutationPvIntentions: {
+          lineSan: [],
+          checksDelivered: 1,
+          capturedTargets: [],
+          castled: false,
+          promoted: false,
+          terminalCheckmate: false,
+          summaryFacts: ["Dark-square diagonal opens toward e1."],
+        },
+      },
+    });
+    expect(playerBlunderPlainNoRef.detailedExplanation).toContain("decisive tactical continuation");
+    expect(playerBlunderPlainNoRef.detailedExplanation).toContain("Dark-square diagonal opens");
+    expect(playerBlunderPlainNoRef.detailedExplanation).toContain("Exposes kingside dark squares.");
+
+    const playerMissNoFuture = await coach.explainMove({
+      personaId: "sage",
+      moveSan: "a3",
+      playedBy: "White",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 18,
+      badge: "Miss",
+      evalBefore: "+3.5",
+      evalAfter: "+0.1",
+      deltaWP: 28,
+      engineBestMove: "Bxf7+",
+      bestMovePV: ["Bxf7+"],
+      tacticalContext: makeContext(),
+    });
+    expect(playerMissNoFuture.detailedExplanation).toContain("Better was 18. Bxf7+.");
+    expect(playerMissNoFuture.bestMoveReasoning).toBe("Bxf7+ seized a commanding edge along 18. Bxf7+.");
+
+    const playerMistakeHanging = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "Nb5",
+      playedBy: "White",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 19,
+      badge: "Mistake",
+      evalBefore: "+0.4",
+      evalAfter: "-1.3",
+      deltaWP: 15,
+      engineBestMove: "O-O",
+      bestMovePV: ["O-O"],
+      refutationPV: [],
+      tacticalContext: makeContext({
+        hangingPieceDetails: { piece: "Knight", square: "b5" },
+      }),
+      coachInsights: {
+        playedSan: "Nb5",
+        bestMoveSan: "O-O",
+        whyBetterFacts: ["O-O safeguards the king."],
+        strategicTradeoffs: ["Delays castling while the e-file opens."],
+        missedOpportunities: [],
+      },
+    });
+    expect(playerMistakeHanging.detailedExplanation).toContain("Knight on b5 becomes vulnerable.");
+    expect(playerMistakeHanging.detailedExplanation).toContain("Delays castling");
+
+    const playerInaccRef = await coach.explainMove({
+      personaId: "danny",
+      moveSan: "h3",
+      playedBy: "White",
+      coachFor: "White",
+      opponentName: "Rival",
+      moveNumber: 20,
+      badge: "Inaccuracy",
+      evalBefore: "+0.7",
+      evalAfter: "+0.3",
+      deltaWP: 7,
+      engineBestMove: "d4",
+      bestMovePV: ["d4"],
+      refutationPV: ["c5", "Nf3"],
+      tacticalContext: makeContext(),
+    });
+    expect(playerInaccRef.detailedExplanation).toContain("Watch for Rival's");
+    expect(playerInaccRef.detailedExplanation).toContain("c5");
+
+    const playerBrilliantNoDetail = await coach.explainMove({
+      personaId: "drillmaster",
+      moveSan: "Bxh7+",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 21,
+      badge: "Brilliant",
+      evalBefore: "+0.8",
+      evalAfter: "+3.4",
+      deltaWP: 0,
+      engineBestMove: "Bxh7+",
+      bestMovePV: ["Bxh7+"],
+      tacticalContext: makeContext(),
+      coachInsights: {
+        playedSan: "Bxh7+",
+        bestMoveSan: "Bxh7+",
+        whyBetterFacts: [],
+        strategicTradeoffs: [],
+        missedOpportunities: [],
+        bestPvIntentions: {
+          lineSan: ["Bxh7+", "Kxh7"],
+          checksDelivered: 1,
+          capturedTargets: [],
+          castled: false,
+          promoted: false,
+          terminalCheckmate: false,
+          summaryFacts: ["King is dragged to an exposed shelter."],
+        },
+      },
+    });
+    expect(playerBrilliantNoDetail.detailedExplanation).toContain("unstoppable compensation.");
+    expect(playerBrilliantNoDetail.detailedExplanation).toContain("King is dragged");
+    expect(playerBrilliantNoDetail.coachingTip).toContain("Shatter the shelter");
+
+    const playerGreatAndBest = await Promise.all([
+      coach.explainMove({
+        personaId: "danny",
+        moveSan: "Qh5",
+        playedBy: "White",
+        coachFor: "White",
+        moveNumber: 22,
+        badge: "Great",
+        evalBefore: "+0.1",
+        evalAfter: "+2.4",
+        deltaWP: 0,
+        engineBestMove: "Qh5",
+        bestMovePV: ["Qh5"],
+        tacticalContext: makeContext({
+          tags: ["TACTICAL_FORK"],
+          forkTargets: ["King on e8", "Rook on h8"],
+        }),
+        coachInsights: {
+          playedSan: "Qh5",
+          bestMoveSan: "Qh5",
+          whyBetterFacts: [],
+          strategicTradeoffs: [],
+          missedOpportunities: [],
+          bestPvIntentions: {
+            lineSan: ["Qh5"],
+            checksDelivered: 0,
+            capturedTargets: [],
+            castled: false,
+            promoted: false,
+            terminalCheckmate: false,
+            summaryFacts: ["Creates decisive dark-square pressure."],
+          },
+        },
+      }),
+      coach.explainMove({
+        personaId: "danny",
+        moveSan: "Re1",
+        playedBy: "White",
+        coachFor: "White",
+        moveNumber: 23,
+        badge: "Best",
+        evalBefore: "+0.6",
+        evalAfter: "+0.6",
+        deltaWP: 0,
+        engineBestMove: "Re1",
+        bestMovePV: ["Re1", "e5"],
+        tacticalContext: makeContext(),
+        coachInsights: {
+          playedSan: "Re1",
+          bestMoveSan: "Re1",
+          whyBetterFacts: [],
+          strategicTradeoffs: [],
+          missedOpportunities: [],
+          bestPvIntentions: {
+            lineSan: ["Re1"],
+            checksDelivered: 0,
+            capturedTargets: [],
+            castled: false,
+            promoted: false,
+            terminalCheckmate: false,
+            summaryFacts: ["Rook eyes the e-file."],
+          },
+        },
+      }),
+      coach.explainMove({
+        personaId: "danny",
+        moveSan: "e4",
+        playedBy: "White",
+        coachFor: "White",
+        moveNumber: 1,
+        badge: "Book",
+        evalBefore: "+0.2",
+        evalAfter: "+0.2",
+        deltaWP: 0,
+        engineBestMove: "e4",
+        bestMovePV: [],
+        tacticalContext: makeContext(),
+      }),
+      coach.explainMove({
+        personaId: "danny",
+        moveSan: "O-O",
+        playedBy: "White",
+        coachFor: "White",
+        moveNumber: 8,
+        badge: "Good",
+        evalBefore: "+0.3",
+        evalAfter: "+0.3",
+        deltaWP: 0.5,
+        engineBestMove: "O-O",
+        bestMovePV: [],
+        tacticalContext: makeContext({ tags: ["KING_SAFETY_CASTLE"] }),
+      }),
+      coach.explainMove({
+        personaId: "danny",
+        moveSan: "Nc3",
+        playedBy: "White",
+        coachFor: "White",
+        moveNumber: 4,
+        badge: "Good",
+        evalBefore: "+0.3",
+        evalAfter: "+0.3",
+        deltaWP: 0.5,
+        engineBestMove: "Nc3",
+        bestMovePV: [],
+        tacticalContext: makeContext({ tags: ["DEVELOPMENT"] }),
+      }),
+    ]);
+    expect(playerGreatAndBest[0].detailedExplanation).toContain("fork");
+    expect(playerGreatAndBest[0].detailedExplanation).toContain("Creates decisive dark-square pressure.");
+    expect(playerGreatAndBest[1].detailedExplanation).toContain("Stockfish's sharpest idea");
+    expect(playerGreatAndBest[1].coachingTip).toBe("Rook eyes the e-file.");
+    expect(playerGreatAndBest[2].detailedExplanation).toContain("the opening,");
+    expect(playerGreatAndBest[3].detailedExplanation).toContain("tucking the king safely");
+    expect(playerGreatAndBest[4].detailedExplanation).toContain("harmonizing development");
   });
 });
