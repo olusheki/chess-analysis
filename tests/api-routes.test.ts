@@ -245,6 +245,39 @@ describe("Next.js API route handlers", () => {
       expect(partialData.detailedExplanation).toContain("(evaluation: -4.5)");
       expect(partialData.detailedExplanation).not.toMatch(/undefined/i);
 
+      const trimmedHangingReq = new NextRequest("http://localhost:3000/api/explain", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "move",
+          payload: {
+            moveSan: "Qd4",
+            playedBy: "White",
+            coachFor: "White",
+            opponentName: "pistapoc",
+            badge: "Blunder",
+            evalBefore: "-0.4",
+            evalAfter: "-3.3",
+            deltaWP: -25,
+            moveNumber: 22,
+            refutationPV: ["Bxf4+", "Kf1", "Bxb5+"],
+            tacticalContext: {
+              tags: ["HANGING_PIECE"],
+              hangingPieceDetails: { piece: "  Bishop  ", square: " b5 " },
+              isCheck: false,
+              isCastle: false,
+              gamePhase: "Middlegame",
+            },
+          },
+        }),
+      });
+      const trimmedHangingRes = await postExplain(trimmedHangingReq);
+      expect(trimmedHangingRes.status).toBe(200);
+      const trimmedHangingData = await trimmedHangingRes.json();
+      expect(trimmedHangingData.shortComment).toContain("Bishop on b5");
+      expect(trimmedHangingData.detailedExplanation).toContain(
+        "Qd4 left your Bishop vulnerable on b5. The strongest continuation for pistapoc starts with"
+      );
+
       const badTypePayloads = [
         { moveSan: "Nf3", playedBy: "White", evalBefore: null, badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
         { moveSan: "Nf3", playedBy: "White", evalAfter: 120, badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
@@ -253,6 +286,86 @@ describe("Next.js API route handlers", () => {
         { moveSan: "Nf3", playedBy: "White", moveNumber: 0, badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
         { moveSan: "Nf3", playedBy: "White", bestMovePV: [null], badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
         { moveSan: "Nf3", playedBy: "White", refutationPV: "Qh4#", badge: "Good", deltaWP: 1, tacticalContext: { tags: [] } },
+        {
+          moveSan: "Qd4",
+          playedBy: "White",
+          badge: "Blunder",
+          deltaWP: -25,
+          tacticalContext: {
+            tags: ["HANGING_PIECE"],
+            hangingPieceDetails: "Bishop on b5",
+          },
+        },
+        {
+          moveSan: "Qd4",
+          playedBy: "White",
+          badge: "Blunder",
+          deltaWP: -25,
+          tacticalContext: {
+            tags: ["HANGING_PIECE"],
+            hangingPieceDetails: [],
+          },
+        },
+        {
+          moveSan: "Qd4",
+          playedBy: "White",
+          badge: "Blunder",
+          deltaWP: -25,
+          tacticalContext: {
+            tags: ["HANGING_PIECE"],
+            hangingPieceDetails: { piece: null, square: "d5" },
+          },
+        },
+        {
+          moveSan: "Qd4",
+          playedBy: "White",
+          badge: "Blunder",
+          deltaWP: -25,
+          tacticalContext: {
+            tags: ["HANGING_PIECE"],
+            hangingPieceDetails: null,
+          },
+        },
+        {
+          moveSan: "Qd4",
+          playedBy: "White",
+          badge: "Blunder",
+          deltaWP: -25,
+          tacticalContext: {
+            tags: ["HANGING_PIECE"],
+            hangingPieceDetails: { piece: "   ", square: "d5" },
+          },
+        },
+        {
+          moveSan: "Qd4",
+          playedBy: "White",
+          badge: "Blunder",
+          deltaWP: -25,
+          tacticalContext: {
+            tags: ["HANGING_PIECE"],
+            hangingPieceDetails: { piece: "Pawn", square: "   " },
+          },
+        },
+        {
+          moveSan: "Qd4",
+          playedBy: "White",
+          badge: "Blunder",
+          deltaWP: -25,
+          tacticalContext: {
+            tags: ["HANGING_PIECE"],
+            hangingPieceDetails: { piece: "Pawn", square: null },
+          },
+        },
+        {
+          moveSan: "Qd4",
+          playedBy: "White",
+          badge: "Blunder",
+          deltaWP: -25,
+          tacticalContext: {
+            tags: ["HANGING_PIECE"],
+            hangingPieceDetails: { piece: "Pawn", square: "d5", value: "3" },
+          },
+        },
       ];
       for (const badPayload of badTypePayloads) {
         const res = await postExplain(

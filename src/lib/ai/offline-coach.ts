@@ -267,6 +267,53 @@ export function formatPhaseMetric(acc: number, count?: number): string {
   return count === 0 ? "N/A" : `${acc}%`;
 }
 
+/**
+ * Checks whether the first ply of an engine refutation directly captures the
+ * vulnerable piece (including en passant on the same file).
+ */
+function sanitizeHangingPieceDetails(
+  details: { piece?: unknown; square?: unknown } | undefined
+): { piece: string; square: string } | undefined {
+  if (!details) return undefined;
+  const piece = cleanString(details.piece);
+  const square = cleanString(details.square);
+  return piece && square ? { piece, square } : undefined;
+}
+
+export function doesRefutationDirectlyCaptureSquare(
+  firstSan: string | undefined,
+  square: string,
+  piece: string,
+  playedBy: "White" | "Black"
+): boolean {
+  const san = cleanString(firstSan);
+  // Keep piece letters case-sensitive so B (Bishop) is never conflated with b-pawn.
+  const captureMatch =
+    /^(?:[KQRBN](?:[a-h][1-8]|[a-h]|[1-8])?|[a-h])x([a-h][1-8])(?:=[QRBN])?(?:[+#!?]|\s|$)/.exec(
+      san
+    );
+  if (!captureMatch) return false;
+
+  const targetSquare = cleanString(square).toLowerCase();
+  if (!/^[a-h][1-8]$/.test(targetSquare)) return false;
+
+  const captureSquare = captureMatch[1];
+  if (captureSquare === targetSquare) return true;
+
+  // En passant captures originate on an adjacent file and land one rank behind the pushed pawn.
+  if (
+    cleanString(piece).toLowerCase() !== "pawn" ||
+    Math.abs(san.charCodeAt(0) - targetSquare.charCodeAt(0)) !== 1 ||
+    captureSquare[0] !== targetSquare[0]
+  ) {
+    return false;
+  }
+  return (
+    (playedBy === "Black" && targetSquare[1] === "5" && captureSquare[1] === "6") ||
+    (playedBy === "White" && targetSquare[1] === "4" && captureSquare[1] === "3")
+  );
+}
+
 function getStyle(personaId?: CoachPersonaId): OfflinePersonaStyle {
   return PERSONA_STYLES[personaId ?? "danny"] ?? PERSONA_STYLES.danny;
 }
@@ -443,8 +490,9 @@ function buildOpponentMoveOfflineExplanation(
     : "Look for checks, captures, and ways to seize the initiative.";
 
   if (badge === "Blunder" || badge === "Miss") {
-    const targetNote = req.tacticalContext.hangingPieceDetails
-      ? ` Their ${req.tacticalContext.hangingPieceDetails.piece} on ${req.tacticalContext.hangingPieceDetails.square} is exposed.`
+    const hangingTarget = sanitizeHangingPieceDetails(req.tacticalContext.hangingPieceDetails);
+    const targetNote = hangingTarget
+      ? ` Their ${hangingTarget.piece} on ${hangingTarget.square} is exposed.`
       : "";
     const oppReasonBase = safeBestMove
       ? style.oppBestReasonLead(inlineOpp, safeBestMove, bestSeq || safeBestMove)
@@ -641,6 +689,9 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
         : validMoveNumber
       : undefined;
   const refutationSeq = formatLineSeq(req.refutationPV, 4, replyMoveNumber, replyTurn);
+  const firstRefSan = Array.isArray(req.refutationPV)
+    ? req.refutationPV.map(cleanString).find(Boolean)
+    : undefined;
   const bestSeq = formatLineSeq(req.bestMovePV, 4, validMoveNumber, playedTurn) || safeBestMove;
 
   if (!isPlayerMove) {
@@ -676,10 +727,20 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
         coachMode: "offline",
       };
     }
-    if (tacticalContext.hangingPieceDetails) {
-      const { piece, square } = tacticalContext.hangingPieceDetails;
+    const hangingBlunder = sanitizeHangingPieceDetails(tacticalContext.hangingPieceDetails);
+    if (hangingBlunder) {
+      const { piece, square } = hangingBlunder;
+      const directCapture = doesRefutationDirectlyCaptureSquare(
+        firstRefSan,
+        square,
+        piece,
+        playedBy
+      );
+      const evalSuffix = evalAfterLabel ? `, shifting the eval to ${evalAfterLabel}` : "";
       const punishClause = refutationSeq
-        ? `${oppLabel} can strike right away with ${refutationSeq}${evalAfterLabel ? `, shifting the eval to ${evalAfterLabel}` : ""}.`
+        ? directCapture
+          ? `${oppLabel} can strike right away with ${refutationSeq}${evalSuffix}.`
+          : `The strongest continuation for ${inlineOpp} starts with ${refutationSeq}${evalSuffix}.`
         : `${oppLabel} can exploit this immediately${evalAfterLabel ? `, shifting the evaluation to ${evalAfterLabel}` : ""}.`;
       return {
         badge,
@@ -730,10 +791,11 @@ export function buildOfflineMoveExplanation(req: CoachExplanationRequest): Coach
         : evalBeforeLabel
         ? `The evaluation shifted from ${evalBeforeLabel}.`
         : "The evaluation shifted unfavorably.";
+    const hangingMistake = sanitizeHangingPieceDetails(tacticalContext.hangingPieceDetails);
     return {
       badge,
       shortComment: style.mistakeHeadline(moveSan),
-      detailedExplanation: `${tacticalContext.hangingPieceDetails ? `Your ${tacticalContext.hangingPieceDetails.piece} on ${tacticalContext.hangingPieceDetails.square} becomes vulnerable. ` : ""}${playerThreatNote ? `${playerThreatNote} ` : ""}${shiftSentence}${punishNote} ${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
+      detailedExplanation: `${hangingMistake ? `Your ${hangingMistake.piece} on ${hangingMistake.square} becomes vulnerable. ` : ""}${playerThreatNote ? `${playerThreatNote} ` : ""}${shiftSentence}${punishNote} ${comparativeReason ? `${comparativeReason} ` : ""}${style.errorClose}`.trim(),
       bestMoveReasoning: formatPlayerBestReasoning(safeBestMove, bestSeq, futureBestFact, style),
       variationTitle: "Optimal Continuation",
       coachingTip: pickTailoredTip(coachInsights, style.mistakeTip, style),

@@ -61,6 +61,12 @@ describe("plain-notation converter & coach prose substitution", () => {
         "Pawn c5 left your Queen vulnerable on e3. Chalata01 can strike right away with bishop takes e3, bishop takes c3 check, b-pawn takes c3, shifting the eval to +6.4."
       );
 
+      const indirectHangingProse =
+        "Qd4 left your Bishop vulnerable on b5. The strongest continuation for pistapoc starts with 22...Bxf4+ 23. Qxf4+ Qxf4+, shifting the eval to -3.3.";
+      expect(formatCoachProse(indirectHangingProse)).toBe(
+        "Queen d4 left your Bishop vulnerable on b5. The strongest continuation for pistapoc starts with 22... bishop takes f4 check 23. queen takes f4 check, queen takes f4 check, shifting the eval to -3.3."
+      );
+
       const missProse =
         "JoelDirt95 had just slipped, but a3 let them off the hook (+4.9 to +1.6). Better was Qa4+ Bd7 Qxb4.";
       expect(formatCoachProse(missProse)).toBe(

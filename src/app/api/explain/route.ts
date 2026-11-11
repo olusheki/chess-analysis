@@ -28,6 +28,21 @@ function isFiniteNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
 }
 
+function isValidHangingPieceDetailsOrUndefined(
+  v: unknown
+): v is { piece: string; square: string; value?: number } | undefined {
+  if (v === undefined) return true;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const d = v as Record<string, unknown>;
+  return (
+    typeof d.piece === "string" &&
+    d.piece.trim().length > 0 &&
+    typeof d.square === "string" &&
+    d.square.trim().length > 0 &&
+    (d.value === undefined || isFiniteNum(d.value))
+  );
+}
+
 function isValidPhasePair(v: unknown): boolean {
   if (!v || typeof v !== "object") return false;
   const pair = v as Record<string, unknown>;
@@ -111,7 +126,8 @@ export async function POST(request: NextRequest) {
         !isOptionalString(reqPayload.engineBestMove) ||
         !isPositiveIntOrUndefined(reqPayload.moveNumber) ||
         !isValidMoveArrayOrUndefined(reqPayload.bestMovePV) ||
-        !isValidMoveArrayOrUndefined(reqPayload.refutationPV)
+        !isValidMoveArrayOrUndefined(reqPayload.refutationPV) ||
+        !isValidHangingPieceDetailsOrUndefined(reqPayload.tacticalContext.hangingPieceDetails)
       ) {
         return NextResponse.json(
           { error: "Missing or invalid move explanation fields." },
@@ -130,6 +146,16 @@ export async function POST(request: NextRequest) {
           reqPayload.refutationPV !== undefined
             ? sanitizeMoveArray(reqPayload.refutationPV)
             : undefined,
+        tacticalContext: reqPayload.tacticalContext.hangingPieceDetails
+          ? {
+              ...reqPayload.tacticalContext,
+              hangingPieceDetails: {
+                ...reqPayload.tacticalContext.hangingPieceDetails,
+                piece: reqPayload.tacticalContext.hangingPieceDetails.piece.trim(),
+                square: reqPayload.tacticalContext.hangingPieceDetails.square.trim(),
+              },
+            }
+          : reqPayload.tacticalContext,
       } as CoachExplanationRequest);
       return NextResponse.json(explanation);
     }

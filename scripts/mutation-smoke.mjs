@@ -342,6 +342,18 @@ const MUTANTS = [
     replacement: `        false ||`,
     testFile: "tests/api-routes.test.ts",
   },
+  {
+    name: "M46: Collapse indirect refutation hanging-piece phrasing back to 'strike right away' in offline-coach.ts",
+    file: "src/lib/ai/offline-coach.ts",
+    target: `      const directCapture = doesRefutationDirectlyCaptureSquare(
+        firstRefSan,
+        square,
+        piece,
+        playedBy
+      );`,
+    replacement: `      const directCapture = true;`,
+    testFile: "tests/gemini-coach.test.ts",
+  },
 ];
 
 let killed = 0;

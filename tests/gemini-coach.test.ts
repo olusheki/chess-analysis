@@ -1,7 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Chess } from "chess.js";
+import { describe, it, expect, vi } from "vitest";
+import { Chess, type Square } from "chess.js";
 import { GeminiCoachService, validateExplanationGrounding } from "@/lib/ai/gemini-coach";
-import { describeTacticalFeatures, formatPhaseMetric } from "@/lib/ai/offline-coach";
+import {
+  describeTacticalFeatures,
+  doesRefutationDirectlyCaptureSquare,
+  formatPhaseMetric,
+} from "@/lib/ai/offline-coach";
 import { COACH_PERSONAS, getCoachPersona } from "@/lib/ai/coach-personas";
 import type { MoveBadge } from "@/lib/analysis/move-classifier";
 import type { TacticalContext } from "@/lib/analysis/tactical-tagger";
@@ -2230,5 +2234,301 @@ describe("gemini-coach & explainability grounding", () => {
     expect(sentPrompt2).toContain("- Mover's Best PV Line: Nf3 e5 Qh4+ Bb5");
     expect(sentPrompt2).not.toContain("a6");
     expect(sentPrompt2).toContain("- Next Reply / Punishment Line (Magnusson): Bg4");
+  });
+
+  it("distinguishes direct capture vs indirect/quiet refutation when bridging hanging-piece blunder prose", async () => {
+    // 1. Direct capture on hanging square preserves "strike right away"
+    const directRes = await coach.explainMove({
+      moveSan: "c5",
+      playedBy: "Black",
+      coachFor: "Black",
+      opponentName: "Chalata01",
+      moveNumber: 12,
+      badge: "Blunder",
+      evalAfter: "+6.4",
+      deltaWP: 38,
+      engineBestMove: "Qe7",
+      bestMovePV: ["Qe7"],
+      refutationPV: ["Bxe3", "a5"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: { square: "e3", piece: "Queen", value: 9 },
+      }),
+    });
+    expect(directRes.detailedExplanation).toContain(
+      "c5 left your Queen vulnerable on e3. Chalata01 can strike right away with 13. Bxe3 a5, shifting the eval to +6.4."
+    );
+
+    // 2. Disambiguated capture on hanging square also counts as a direct capture
+    const disambigRes = await coach.explainMove({
+      moveSan: "Qb3",
+      playedBy: "Black",
+      coachFor: "Black",
+      opponentName: "Chalata01",
+      moveNumber: 14,
+      badge: "Blunder",
+      evalAfter: "+5.1",
+      deltaWP: 30,
+      bestMovePV: [],
+      refutationPV: ["Raxe3+"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: { square: "e3", piece: "Queen", value: 9 },
+      }),
+    });
+    expect(disambigRes.detailedExplanation).toContain(
+      "Chalata01 can strike right away with 15. Raxe3+, shifting the eval to +5.1."
+    );
+
+    // 3. En passant capture of hanging Pawn on d5 via exd6 counts as direct capture
+    const epRes = await coach.explainMove({
+      moveSan: "d5",
+      playedBy: "Black",
+      coachFor: "Black",
+      opponentName: "WhitePlayer",
+      moveNumber: 10,
+      badge: "Blunder",
+      evalAfter: "+2.4",
+      deltaWP: 22,
+      bestMovePV: [],
+      refutationPV: ["exd6"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: { square: "d5", piece: "Pawn", value: 1 },
+      }),
+    });
+    expect(epRes.detailedExplanation).toContain(
+      "WhitePlayer can strike right away with 11. exd6, shifting the eval to +2.4."
+    );
+
+    // 4. Piece capture on d6 when hanging Pawn is on d5 is NOT en passant -> indirect continuation wording
+    const rookOnAdjacentRes = await coach.explainMove({
+      moveSan: "d5",
+      playedBy: "Black",
+      coachFor: "Black",
+      opponentName: "WhitePlayer",
+      moveNumber: 10,
+      badge: "Blunder",
+      evalAfter: "+2.9",
+      deltaWP: 25,
+      bestMovePV: [],
+      refutationPV: ["Rxd6"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: { square: "d5", piece: "Pawn", value: 1 },
+      }),
+    });
+    expect(rookOnAdjacentRes.detailedExplanation).not.toContain("strike right away");
+    expect(rookOnAdjacentRes.detailedExplanation).toContain(
+      "The strongest continuation for WhitePlayer starts with 11. Rxd6, shifting the eval to +2.9."
+    );
+
+    // 5. Indirect/forcing deflection capture on another square (e.g. 22. Qd4 vs pistapoc: Bb5 hangs, PV starts 22...Bxf4+)
+    const indirectRes = await coach.explainMove({
+      moveSan: "Qd4",
+      playedBy: "White",
+      coachFor: "White",
+      opponentName: "pistapoc",
+      moveNumber: 22,
+      badge: "Blunder",
+      evalBefore: "+0.2",
+      evalAfter: "-3.3",
+      deltaWP: 40,
+      engineBestMove: "Qd3",
+      bestMovePV: ["Qd3", "Qe7"],
+      refutationPV: ["  ", "Bxf4+", "Qxf4+", "Qxf4+"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: { square: "b5", piece: "Bishop", value: 3 },
+      }),
+    });
+    expect(indirectRes.detailedExplanation).toContain("Qd4 left your Bishop vulnerable on b5.");
+    expect(indirectRes.detailedExplanation).not.toContain("strike right away");
+    expect(indirectRes.detailedExplanation).toContain(
+      "The strongest continuation for pistapoc starts with 22...Bxf4+ 23. Qxf4+ Qxf4+, shifting the eval to -3.3."
+    );
+
+    // 6. Quiet non-capture refutation move (e.g. 15. b4: Rh1 hangs, PV starts with 15...e5) without evalAfter
+    const quietRes = await coach.explainMove({
+      moveSan: "b4",
+      playedBy: "White",
+      coachFor: "White",
+      moveNumber: 15,
+      badge: "Blunder",
+      deltaWP: 36,
+      bestMovePV: [],
+      refutationPV: ["e5", "Bd2", "Bxh1"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: { square: "h1", piece: "Rook", value: 5 },
+      }),
+    });
+    expect(quietRes.detailedExplanation).toContain("b4 left your Rook vulnerable on h1.");
+    expect(quietRes.detailedExplanation).not.toContain("strike right away");
+    expect(quietRes.detailedExplanation).toContain(
+      "The strongest continuation for your opponent starts with 15...e5 16. Bd2 Bxh1."
+    );
+    expect(quietRes.detailedExplanation).not.toContain("shifting the eval");
+
+    // 7. Opponent move leaving piece vulnerable with indirect reply remains clear and non-misleading
+    const oppRes = await coach.explainMove({
+      moveSan: "Qd4",
+      playedBy: "White",
+      coachFor: "Black",
+      opponentName: "olusheki",
+      moveNumber: 22,
+      badge: "Blunder",
+      evalBefore: "+0.2",
+      evalAfter: "-3.3",
+      deltaWP: 40,
+      bestMovePV: [],
+      refutationPV: ["Bxf4+", "Qxf4+", "Qxf4+"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: { square: "b5", piece: "Bishop", value: 3 },
+      }),
+    });
+    expect(oppRes.detailedExplanation).toContain("Their Bishop on b5 is exposed.");
+    expect(oppRes.detailedExplanation).toContain("Your best reply starts with 22...Bxf4+ 23. Qxf4+ Qxf4+.");
+    expect(oppRes.detailedExplanation).not.toContain("strike right away");
+
+    // 8. Helper edge cases: empty/malformed/non-string inputs, case normalization, promotion, castling, EP bounds, file-disambiguated captures
+    expect(doesRefutationDirectlyCaptureSquare(undefined, "e4", "Pawn", "White")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("   ", "e4", "Pawn", "White")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("Bxe3", "", "Queen", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("O-O", "g1", "King", "White")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("O-O-O", "c1", "King", "White")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("Bxe3+", " E3 ", "Queen", "Black")).toBe(true);
+    expect(doesRefutationDirectlyCaptureSquare("N5xe3#", "e3", "Knight", "Black")).toBe(true);
+    expect(doesRefutationDirectlyCaptureSquare("Qh4xe3#", "e3", "Queen", "Black")).toBe(true);
+    expect(doesRefutationDirectlyCaptureSquare("dxe8=Q+", "e8", "Rook", "Black")).toBe(true);
+    expect(doesRefutationDirectlyCaptureSquare("dxe3", "e4", "Pawn", "White")).toBe(true);
+    expect(doesRefutationDirectlyCaptureSquare("dxe3", "e4", "Pawn", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("dxe3", "e2", "Pawn", "White")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("dxe5", "e4", "Pawn", "White")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("exd6", "d5", "Pawn", "White")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("exd6", "d5", "  Pawn  ", "Black")).toBe(true);
+    expect(doesRefutationDirectlyCaptureSquare("cxd6", "d5", "Pawn", "Black")).toBe(true);
+    expect(doesRefutationDirectlyCaptureSquare("exd6", "d5", null as unknown as string, "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("exd6", "d7", "Pawn", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("exd4", "d5", "Pawn", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("cxb6", "d5", "Pawn", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("axd6", "d5", "Pawn", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("Bxd6", "d5", "Pawn", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("exd6", "d5", "Knight", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("Raxd6", "d5", "Pawn", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("xe3", "e3", "Queen", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("fooBxe3", "e3", "Queen", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("Qxe34", "e3", "Queen", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("exd6", "d5foo", "Pawn", "Black")).toBe(false);
+    expect(doesRefutationDirectlyCaptureSquare("exd6", "d5d5", "Pawn", "Black")).toBe(false);
+
+    // 9. Sanitization guard for padded or malformed hangingPieceDetails in direct offline calls
+    const nullPieceHanging = await coach.explainMove({
+      moveSan: "Qd4",
+      playedBy: "White",
+      coachFor: "White",
+      badge: "Blunder",
+      evalBefore: "-0.4",
+      evalAfter: "-3.3",
+      deltaWP: 40,
+      bestMovePV: [],
+      refutationPV: ["Bxf4+", "Kf1"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: {
+          piece: null as unknown as string,
+          square: "b5",
+          value: 3,
+        },
+      }),
+    });
+    expect(JSON.stringify(nullPieceHanging)).not.toMatch(/\bnull\b/i);
+    expect(nullPieceHanging.shortComment).toBe("Careful! Qd4 hits a snag and swings the game.");
+
+    const emptySquareHanging = await coach.explainMove({
+      moveSan: "Qd4",
+      playedBy: "White",
+      coachFor: "White",
+      badge: "Blunder",
+      evalBefore: "-0.4",
+      evalAfter: "-3.3",
+      deltaWP: 40,
+      bestMovePV: [],
+      refutationPV: ["Bxf4+", "Kf1"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: {
+          piece: "Bishop",
+          square: "   " as unknown as Square,
+          value: 3,
+        },
+      }),
+    });
+    expect(emptySquareHanging.shortComment).toBe("Careful! Qd4 hits a snag and swings the game.");
+
+    const oppNullPieceHanging = await coach.explainMove({
+      moveSan: "Qd4",
+      playedBy: "White",
+      coachFor: "Black",
+      badge: "Blunder",
+      deltaWP: 40,
+      bestMovePV: [],
+      refutationPV: ["Bxf4+", "Kf1"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: {
+          piece: null as unknown as string,
+          square: "b5",
+          value: 3,
+        },
+      }),
+    });
+    expect(JSON.stringify(oppNullPieceHanging)).not.toMatch(/\bnull\b/i);
+
+    const paddedHanging = await coach.explainMove({
+      moveSan: "Qd4",
+      playedBy: "White",
+      coachFor: "White",
+      badge: "Blunder",
+      evalBefore: "-0.4",
+      evalAfter: "-3.3",
+      deltaWP: 40,
+      bestMovePV: [],
+      refutationPV: ["Bxf4+", "Kf1"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: {
+          piece: "  Bishop  ",
+          square: " b5 " as unknown as Square,
+          value: 3,
+        },
+      }),
+    });
+    expect(paddedHanging.shortComment).toContain("Bishop on b5");
+    expect(paddedHanging.detailedExplanation).toContain("left your Bishop vulnerable on b5.");
+
+    const paddedMistakeHanging = await coach.explainMove({
+      moveSan: "Qd4",
+      playedBy: "White",
+      coachFor: "White",
+      badge: "Mistake",
+      evalBefore: "-0.4",
+      evalAfter: "-1.9",
+      deltaWP: 15,
+      bestMovePV: [],
+      refutationPV: ["Bxf4+", "Kf1"],
+      tacticalContext: makeContext({
+        tags: ["HANGING_PIECE"],
+        hangingPieceDetails: {
+          piece: "  Bishop  ",
+          square: " b5 " as unknown as Square,
+          value: 3,
+        },
+      }),
+    });
+    expect(paddedMistakeHanging.detailedExplanation).toContain(
+      "Your Bishop on b5 becomes vulnerable."
+    );
   });
 });
