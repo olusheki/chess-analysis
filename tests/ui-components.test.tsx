@@ -14,6 +14,8 @@ import { CoachAvatar } from "@/components/review/CoachAvatar";
 import { MoveListReview } from "@/components/review/MoveListReview";
 import { UsernameImporter } from "@/components/importer/UsernameImporter";
 import { GameSelectionList } from "@/components/importer/GameSelectionList";
+import { PlayModePanel } from "@/components/review/PlayModePanel";
+import type { PlayModeState } from "@/lib/store/useReviewStore";
 
 describe("UI components & visual geometry", () => {
   beforeEach(() => {
@@ -942,6 +944,209 @@ describe("UI components & visual geometry", () => {
       fireEvent.change(input, { target: { value: "  AIzaTestKey123  " } });
       fireEvent.click(screen.getByRole("button", { name: "Apply" }));
       expect(onChangeApiKey).toHaveBeenCalledWith("AIzaTestKey123");
+    });
+  });
+
+  describe("PlayModePanel interactive Play-from-Position view", () => {
+    function buildPlayState(overrides: Partial<PlayModeState> = {}): PlayModeState {
+      const fen = "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3";
+      return {
+        active: true,
+        startMode: "before-move",
+        anchorFen: fen,
+        anchorPly: 5,
+        anchorDescription: "Fix from 3... g5",
+        anchorWhiteCp: 25,
+        userColor: "b",
+        targetElo: 1450,
+        matchedElo: 1450,
+        matchedEloSource: "pgn",
+        fen,
+        moves: [],
+        undoStack: [],
+        lastMove: null,
+        currentEval: {
+          fen,
+          depth: 12,
+          bestMoveUci: "g8f6",
+          bestMoveSan: "Nf6",
+          whiteCp: 20,
+          lines: [
+            { multipv: 1, cp: 20, pvUci: ["g8f6", "d2d3"], pvSan: ["Nf6", "d3"] },
+          ],
+        },
+        evalWhiteCp: 20,
+        isThinking: false,
+        isEvaluatingMove: false,
+        showBestMove: false,
+        gameOver: null,
+        ...overrides,
+      };
+    }
+
+    it("renders matched ELO slider/presets, disabled Undo initially, Show Best Move hint in plain English or SAN, and Restart/Exit controls", () => {
+      const onSetTargetElo = vi.fn();
+      const onUndo = vi.fn();
+      const onToggleBestMove = vi.fn();
+      const onRestart = vi.fn();
+      const onExit = vi.fn();
+
+      const { rerender } = render(
+        <PlayModePanel
+          playMode={buildPlayState()}
+          personaId="danny"
+          plainEnglish={true}
+          onSetTargetElo={onSetTargetElo}
+          onUndo={onUndo}
+          onToggleBestMove={onToggleBestMove}
+          onRestart={onRestart}
+          onExit={onExit}
+        />
+      );
+
+      expect(screen.getByText(/PLAY VS STOCKFISH/i)).toBeInTheDocument();
+      expect(screen.getByText(/Matched: 1450/i)).toBeInTheDocument();
+
+      const undoBtn = screen.getByRole("button", { name: /undo/i });
+      expect(undoBtn).toBeDisabled();
+
+      fireEvent.click(screen.getByRole("button", { name: /max/i }));
+      expect(onSetTargetElo).toHaveBeenCalledWith(3190);
+
+      fireEvent.change(screen.getByLabelText("Stockfish target ELO"), {
+        target: { value: "1800" },
+      });
+      expect(onSetTargetElo).toHaveBeenCalledWith(1800);
+
+      fireEvent.click(screen.getByRole("button", { name: /show best move/i }));
+      expect(onToggleBestMove).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: /restart/i }));
+      expect(onRestart).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: /exit play/i }));
+      expect(onExit).toHaveBeenCalledTimes(1);
+
+      // Re-render with Show Best Move active -> reveals Plain English hint
+      rerender(
+        <PlayModePanel
+          playMode={buildPlayState({ showBestMove: true })}
+          personaId="danny"
+          plainEnglish={true}
+          onSetTargetElo={onSetTargetElo}
+          onUndo={onUndo}
+          onToggleBestMove={onToggleBestMove}
+          onRestart={onRestart}
+          onExit={onExit}
+        />
+      );
+      expect(screen.getByText(/Best Move Hint:\s*knight f6/i)).toBeInTheDocument();
+
+      // Re-render with plainEnglish=false -> switches PV hint to SAN
+      rerender(
+        <PlayModePanel
+          playMode={buildPlayState({ showBestMove: true })}
+          personaId="danny"
+          plainEnglish={false}
+          onSetTargetElo={onSetTargetElo}
+          onUndo={onUndo}
+          onToggleBestMove={onToggleBestMove}
+          onRestart={onRestart}
+          onExit={onExit}
+        />
+      );
+      expect(screen.getByText("Best Move Hint: Nf6")).toBeInTheDocument();
+      expect(screen.getByText("Nf6")).toBeInTheDocument();
+    });
+
+    it("enables Undo after user move, displays live move grading card, and renders Game Over banner", () => {
+      const onUndo = vi.fn();
+      const onRestart = vi.fn();
+      const onExit = vi.fn();
+      const base = buildPlayState();
+
+      render(
+        <PlayModePanel
+          playMode={buildPlayState({
+            undoStack: [
+              {
+                fen: base.fen,
+                moves: [],
+                lastMove: null,
+                currentEval: base.currentEval,
+                evalWhiteCp: 20,
+              },
+            ],
+            moves: [
+              {
+                id: "play-1",
+                ply: 6,
+                moveNumber: 3,
+                color: "b",
+                san: "g5",
+                uci: "g7g5",
+                from: "g7",
+                to: "g5",
+                fenBefore: base.fen,
+                fenAfter: "r1bqkbnr/pppp1p1p/2n5/4p1p1/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4",
+                by: "user",
+                grade: {
+                  ply: 6,
+                  moveNumber: 3,
+                  color: "b",
+                  san: "g5",
+                  uci: "g7g5",
+                  from: "g7",
+                  to: "g5",
+                  fenBefore: base.fen,
+                  fenAfter: "r1bqkbnr/pppp1p1p/2n5/4p1p1/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4",
+                  badge: "Blunder",
+                  deltaWP: 32.5,
+                  accuracy: 18.4,
+                  wpBest: 0.48,
+                  whiteCp: 350,
+                  evalLabel: "+3.5",
+                  bestMoveUci: "g8f6",
+                  bestMoveSan: "Nf6",
+                  bestMovePvSan: ["Nf6", "d3"],
+                  refutationPvSan: ["Nxg5"],
+                  explanation: {
+                    badge: "Blunder",
+                    shortComment: "Weakens kingside dark squares.",
+                    detailedExplanation: "Playing g5 leaves f7 exposed while Nf6 developed smoothly.",
+                    bestMoveReasoning: "Nf6 develops and pressures e4.",
+                    coachingTip: "Develop Nf6 before pushing flank pawns.",
+                  },
+                },
+              },
+            ],
+            gameOver: {
+              reason: "checkmate",
+              winner: "engine",
+              title: "Checkmate — Stockfish won",
+              subtitle: "Try undoing the turning point or lowering the target ELO.",
+            },
+          })}
+          personaId="drillmaster"
+          plainEnglish={false}
+          onSetTargetElo={vi.fn()}
+          onUndo={onUndo}
+          onToggleBestMove={vi.fn()}
+          onRestart={onRestart}
+          onExit={onExit}
+        />
+      );
+
+      const undoBtn = screen.getByRole("button", { name: /^undo$/i });
+      expect(undoBtn).toBeEnabled();
+      fireEvent.click(undoBtn);
+      expect(onUndo).toHaveBeenCalledTimes(1);
+
+      expect(screen.getByLabelText("Blunder")).toBeInTheDocument();
+      expect(screen.getByText(/18\.4%/)).toBeInTheDocument();
+      expect(screen.getByText(/Checkmate — Stockfish won/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /play again/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /back to review/i })).toBeInTheDocument();
     });
   });
 });
