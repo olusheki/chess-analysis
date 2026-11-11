@@ -503,4 +503,65 @@ describe("tactical-tagger (deterministic board feature detector)", () => {
     expect(ctxFull.missedTactic?.netGain).toBe(5);
     expect(ctxFull.missedTactic?.isExchange).toBeFalsy();
   });
+
+  it("sorts fork targets highest-value first, rejects equal-value defended fork targets, and checks capture/mate/exchange boundaries", () => {
+    // Higher-value Queen on e8 must sort before Rook on a8 despite a8 being scanned earlier
+    const sortForkFen = "r3q1k1/8/8/1N6/8/8/8/6K1 w - - 0 20";
+    const ctxSort = playAndExtract(sortForkFen, "Nc7", 20);
+    expect(ctxSort.tags).toContain("TACTICAL_FORK");
+    expect(ctxSort.forkTargets?.[0]?.piece).toBe("Queen");
+    expect(ctxSort.forkTargets?.[1]?.piece).toBe("Rook");
+    expect(ctxSort.forkTargets?.map((t) => t.square)).toEqual(["e8", "a8"]);
+
+    // Bishop (3) safely attacking two pawn-defended Knights (3) is equal-value, NOT a fork
+    const equalDefendedFen = "6k1/1p6/2n3p1/7n/8/8/4B3/4K3 w - - 0 20";
+    const ctxEqual = playAndExtract(equalDefendedFen, "Bf3", 20);
+    expect(ctxEqual.tags).not.toContain("TACTICAL_FORK");
+
+    // Equal-value refutation capture (refGain === 0) and non-capture refutation do NOT trigger HANGING_PIECE
+    const equalRefBefore = "4k3/2p5/3b4/8/1B6/8/8/4K3 b - - 0 15";
+    const cEqRef = new Chess(equalRefBefore);
+    cEqRef.move("Kf8");
+    const ctxEqRef = extractTacticalContext(equalRefBefore, cEqRef.fen(), "Kf8", 15, {
+      refutationPvSan: ["Bxd6"],
+      badge: "Mistake",
+    });
+    expect(ctxEqRef.tags).not.toContain("HANGING_PIECE");
+
+    const quietRefBefore = "4k3/8/8/8/8/8/8/3QK3 b - - 0 15";
+    const cQuietRef = new Chess(quietRefBefore);
+    cQuietRef.move("Kf8");
+    const ctxQuietRef = extractTacticalContext(quietRefBefore, cQuietRef.fen(), "Kf8", 15, {
+      refutationPvSan: ["Qd5"],
+      badge: "Mistake",
+    });
+    expect(ctxQuietRef.tags).not.toContain("HANGING_PIECE");
+
+    // Missed 1-pawn capture is reported for Miss/Blunder/Mistake, suppressed for Inaccuracy
+    const pawnMissBefore = "4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 15";
+    const cPm = new Chess(pawnMissBefore);
+    cPm.move("Kf1");
+    const ctxPawnMiss = extractTacticalContext(pawnMissBefore, cPm.fen(), "Kf1", 15, {
+      bestMoveSan: "exd5",
+      badge: "Miss",
+    });
+    expect(ctxPawnMiss.tags).toContain("MISSED_CAPTURE");
+    expect(ctxPawnMiss.missedTactic?.netGain).toBe(1);
+
+    const ctxPawnInacc = extractTacticalContext(pawnMissBefore, cPm.fen(), "Kf1", 15, {
+      bestMoveSan: "exd5",
+      badge: "Inaccuracy",
+    });
+    expect(ctxPawnInacc.tags).not.toContain("MISSED_CAPTURE");
+
+    // Promotion undercapture onto a defended Rook is not labeled as winning the exchange
+    const promoRookBefore = "r2r2k1/2P5/8/8/8/8/8/4K3 w - - 0 20";
+    const cPromo = new Chess(promoRookBefore);
+    cPromo.move("Kf1");
+    const ctxPromo = extractTacticalContext(promoRookBefore, cPromo.fen(), "Kf1", 20, {
+      bestMoveSan: "cxd8=N",
+      badge: "Miss",
+    });
+    expect(ctxPromo.missedTactic?.isExchange).toBeFalsy();
+  });
 });

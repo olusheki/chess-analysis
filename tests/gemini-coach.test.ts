@@ -1918,5 +1918,31 @@ describe("gemini-coach & explainability grounding", () => {
     });
     expect(inaccRes.detailedExplanation).toContain("Watch for your opponent's");
     expect(inaccRes.detailedExplanation).not.toMatch(/(?<!^|\. )Your opponent/);
+
+    const oppInacc = await coach.explainMove({
+      moveSan: "a6",
+      playedBy: "Black",
+      coachFor: "White",
+      moveNumber: 9,
+      badge: "Inaccuracy",
+      evalBefore: "+0.3",
+      evalAfter: "+0.9",
+      deltaWP: 7.5,
+      engineBestMove: "Nc6",
+      bestMovePV: ["Nc6", "d4"],
+      refutationPV: ["d4"],
+      tacticalContext: makeContext({
+        tags: ["ALLOWS_FORK"],
+        allowedThreat: {
+          kind: "FORK",
+          refutationMoveSan: "Nd5",
+          targetSummary: "Queen on d8 and Rook on c7",
+        },
+      }),
+    });
+    expect(oppInacc.coachMode).toBe("offline");
+    expect(oppInacc.detailedExplanation).toContain("conceded 7.5% win probability");
+    expect(oppInacc.detailedExplanation).toContain("forking");
+    expect(oppInacc.detailedExplanation).not.toMatch(/(?<!^|\. )Your opponent/);
   });
 });

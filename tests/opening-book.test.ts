@@ -180,5 +180,12 @@ describe("opening-book (ECO classifier & transposition matcher)", () => {
     const fallbackInsight = getOpeningInsight("", "Unmatched Custom Line");
     expect(fallbackInsight).toContain("Unmatched Custom Line");
     expect(fallbackInsight).not.toContain("()");
+
+    const trimmedUpperA = getOpeningInsight(" a00 ", "Unmatched Irregular Line");
+    expect(trimmedUpperA).toContain("flank or irregular structures");
+    expect(trimmedUpperA).toContain("( a00 )");
+    expect(getOpeningInsight("c50", "Unmatched Open Line")).toContain(
+      "classical open-game principles"
+    );
   });
 });

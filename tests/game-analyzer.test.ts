@@ -762,4 +762,261 @@ describe("game-analyzer (full Tier 1 + Tier 2 pipeline)", () => {
     expect(moveBxd7.san).toBe("Bxd7+");
     expect(moveBxd7.classification.badge).toBe("Great");
   });
+
+  it("preserves Great on quiet moves, off-square or minor-delta captures, and lower-value-victim deflections, while downgrading blundered Rook checks", async () => {
+    // 1. Quiet Great move after opponent pawn push stays Great
+    const quietPgn = `[SetUp "1"]
+[FEN "6k1/4p3/8/8/8/8/8/3RK3 b - - 0 20"]
+
+20... e5 21. Rd7 *`;
+    const cQ = new Chess("6k1/4p3/8/8/8/8/8/3RK3 b - - 0 20");
+    const qFen0 = cQ.fen();
+    cQ.move("e5");
+    const qFen1 = cQ.fen();
+    const resQuiet = await analyzeGame(
+      quietPgn,
+      {
+        async evaluatePosition(fen, depth) {
+          if (fen === qFen0) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "g8f8",
+              bestMoveSan: "Kf8",
+              whiteCp: 40,
+              lines: [{ multipv: 1, cp: 40, pvUci: ["g8f8"], pvSan: ["Kf8"] }],
+            };
+          }
+          if (fen === qFen1) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "d1d7",
+              bestMoveSan: "Rd7",
+              whiteCp: 350,
+              lines: [
+                { multipv: 1, cp: 350, pvUci: ["d1d7"], pvSan: ["Rd7"] },
+                { multipv: 2, cp: -50, pvUci: ["e1d2"], pvSan: ["Kd2"] },
+              ],
+            };
+          }
+          return {
+            fen,
+            depth,
+            bestMoveUci: "g8f8",
+            bestMoveSan: "Kf8",
+            whiteCp: 350,
+            lines: [{ multipv: 1, cp: 350, pvUci: ["g8f8"], pvSan: ["Kf8"] }],
+          };
+        },
+        dispose() {},
+      },
+      { depth: 12 }
+    );
+    expect(resQuiet.moves[1].classification.badge).toBe("Great");
+
+    // 2. Capture onto prevMove.to when prevDeltaWP < 15% stays Great
+    const smallDeltaPgn = `[SetUp "1"]
+[FEN "1n4k1/8/8/8/8/8/8/3QK3 b - - 0 20"]
+
+20... Nd7 21. Qxd7 *`;
+    const cSd = new Chess("1n4k1/8/8/8/8/8/8/3QK3 b - - 0 20");
+    const sdFen0 = cSd.fen();
+    cSd.move("Nd7");
+    const sdFen1 = cSd.fen();
+    const resSd = await analyzeGame(
+      smallDeltaPgn,
+      {
+        async evaluatePosition(fen, depth) {
+          if (fen === sdFen0) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "b8c6",
+              bestMoveSan: "Nc6",
+              whiteCp: 20,
+              lines: [{ multipv: 1, cp: 20, pvUci: ["b8c6"], pvSan: ["Nc6"] }],
+            };
+          }
+          if (fen === sdFen1) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "d1d7",
+              bestMoveSan: "Qxd7",
+              whiteCp: 70, // +11.0% WP delta (< 15%)
+              lines: [
+                { multipv: 1, cp: 70, pvUci: ["d1d7"], pvSan: ["Qxd7"] },
+                { multipv: 2, cp: -50, pvUci: ["d1d5"], pvSan: ["Qd5"] },
+              ],
+            };
+          }
+          return {
+            fen,
+            depth,
+            bestMoveUci: "g8f8",
+            bestMoveSan: "Kf8",
+            whiteCp: 70,
+            lines: [{ multipv: 1, cp: 70, pvUci: ["g8f8"], pvSan: ["Kf8"] }],
+          };
+        },
+        dispose() {},
+      },
+      { depth: 12 }
+    );
+    expect(resSd.moves[1].classification.badge).toBe("Great");
+
+    // 3. Off-square capture onto defended Rook (prevMove.to !== capturedSq, prevDeltaWP = 18.6% < 25%) stays Great
+    const offSqPgn = `[SetUp "1"]
+[FEN "2k5/p2r4/8/1B6/8/8/8/4K3 b - - 0 20"]
+
+20... a6 21. Bxd7+ *`;
+    const cOff = new Chess("2k5/p2r4/8/1B6/8/8/8/4K3 b - - 0 20");
+    const offFen0 = cOff.fen();
+    cOff.move("a6");
+    const offFen1 = cOff.fen();
+    const resOff = await analyzeGame(
+      offSqPgn,
+      {
+        async evaluatePosition(fen, depth) {
+          if (fen === offFen0) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "d7d8",
+              bestMoveSan: "Rd8",
+              whiteCp: 0,
+              lines: [{ multipv: 1, cp: 0, pvUci: ["d7d8"], pvSan: ["Rd8"] }],
+            };
+          }
+          if (fen === offFen1) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "b5d7",
+              bestMoveSan: "Bxd7+",
+              whiteCp: 85, // 50% -> 68.6% (18.6% delta, < 25%)
+              lines: [
+                { multipv: 1, cp: 85, pvUci: ["b5d7"], pvSan: ["Bxd7+"] },
+                { multipv: 2, cp: -50, pvUci: ["b5a4"], pvSan: ["Ba4"] },
+              ],
+            };
+          }
+          return {
+            fen,
+            depth,
+            bestMoveUci: "c8d7",
+            bestMoveSan: "Kxd7",
+            whiteCp: 85,
+            lines: [{ multipv: 1, cp: 85, pvUci: ["c8d7"], pvSan: ["Kxd7"] }],
+          };
+        },
+        dispose() {},
+      },
+      { depth: 12 }
+    );
+    expect(resOff.moves[1].classification.badge).toBe("Great");
+
+    // 4. Undefended capture after 18.6% WP mistake (>= 15% free-grab threshold) downgrades to Best
+    const lowerVictimPgn = `[SetUp "1"]
+[FEN "1n4k1/8/8/8/8/8/8/3RK3 b - - 0 20"]
+
+20... Nd7 21. Rxd7 *`;
+    const cLow = new Chess("1n4k1/8/8/8/8/8/8/3RK3 b - - 0 20");
+    const lowFen0 = cLow.fen();
+    cLow.move("Nd7");
+    const lowFen1 = cLow.fen();
+    const resLow = await analyzeGame(
+      lowerVictimPgn,
+      {
+        async evaluatePosition(fen, depth) {
+          if (fen === lowFen0) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "b8c6",
+              bestMoveSan: "Nc6",
+              whiteCp: 0,
+              lines: [{ multipv: 1, cp: 0, pvUci: ["b8c6"], pvSan: ["Nc6"] }],
+            };
+          }
+          if (fen === lowFen1) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "d1d7",
+              bestMoveSan: "Rxd7",
+              whiteCp: 85, // 50% -> 68.6% (18.6% delta >= 15% free-grab threshold)
+              lines: [
+                { multipv: 1, cp: 85, pvUci: ["d1d7"], pvSan: ["Rxd7"] },
+                { multipv: 2, cp: -50, pvUci: ["e1f1"], pvSan: ["Kf1"] },
+              ],
+            };
+          }
+          return {
+            fen,
+            depth,
+            bestMoveUci: "g8f8",
+            bestMoveSan: "Kf8",
+            whiteCp: 85,
+            lines: [{ multipv: 1, cp: 85, pvUci: ["g8f8"], pvSan: ["Kf8"] }],
+          };
+        },
+        dispose() {},
+      },
+      { depth: 12 }
+    );
+    expect(resLow.moves[1].classification.badge).toBe("Best");
+
+    // 5. Blundered Rook check captured on equal Rook value (capturedVal === 5) downgrades to Best
+    const rookBlunderPgn = `[SetUp "1"]
+[FEN "4rk2/5p2/8/8/8/8/8/4R1K1 b - - 0 20"]
+
+20... Re6 21. Rxe6+ *`;
+    const cRook = new Chess("4rk2/5p2/8/8/8/8/8/4R1K1 b - - 0 20");
+    const rFen0 = cRook.fen();
+    cRook.move("Re6");
+    const rFen1 = cRook.fen();
+    const resRook = await analyzeGame(
+      rookBlunderPgn,
+      {
+        async evaluatePosition(fen, depth) {
+          if (fen === rFen0) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "f8g7",
+              bestMoveSan: "Kg7",
+              whiteCp: 0,
+              lines: [{ multipv: 1, cp: 0, pvUci: ["f8g7"], pvSan: ["Kg7"] }],
+            };
+          }
+          if (fen === rFen1) {
+            return {
+              fen,
+              depth,
+              bestMoveUci: "e1e6",
+              bestMoveSan: "Rxe6+",
+              whiteCp: 500,
+              lines: [
+                { multipv: 1, cp: 500, pvUci: ["e1e6"], pvSan: ["Rxe6+"] },
+                { multipv: 2, cp: -50, pvUci: ["g1f1"], pvSan: ["Kf1"] },
+              ],
+            };
+          }
+          return {
+            fen,
+            depth,
+            bestMoveUci: "f7e6",
+            bestMoveSan: "fxe6",
+            whiteCp: 500,
+            lines: [{ multipv: 1, cp: 500, pvUci: ["f7e6"], pvSan: ["fxe6"] }],
+          };
+        },
+        dispose() {},
+      },
+      { depth: 12 }
+    );
+    expect(resRook.moves[1].classification.badge).toBe("Best");
+  });
 });
