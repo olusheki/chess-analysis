@@ -15,6 +15,8 @@ interface NavigationBarProps {
   currentPly: number;
   totalPlies: number;
   hasKeyMoments: boolean;
+  inVariation?: boolean;
+  canStepForwardInVariation?: boolean;
   onStart: () => void;
   onPrev: () => void;
   onNextKeyMoment: () => void;
@@ -29,6 +31,8 @@ export function NavigationBar({
   currentPly,
   totalPlies,
   hasKeyMoments,
+  inVariation = false,
+  canStepForwardInVariation = false,
   onStart,
   onPrev,
   onNextKeyMoment,
@@ -38,12 +42,16 @@ export function NavigationBar({
   onPlayFromHere,
   playModeActive = false,
 }: NavigationBarProps) {
+  const disableBack = !inVariation && currentPly <= 0;
+  const disableNext = inVariation ? !canStepForwardInVariation : currentPly >= totalPlies;
+  const disableEnd = !inVariation && currentPly >= totalPlies;
+
   return (
     <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-[#3d3b38] bg-[#21201d] p-2 sm:flex-nowrap">
       <button
         type="button"
         onClick={onStart}
-        disabled={currentPly <= 0}
+        disabled={disableBack}
         aria-label="Jump to start"
         title="Start (Home)"
         className="rounded bg-[#262522] p-2 text-[#c9c7c3] transition hover:bg-[#312e2b] hover:text-white disabled:opacity-40"
@@ -54,7 +62,7 @@ export function NavigationBar({
       <button
         type="button"
         onClick={onPrev}
-        disabled={currentPly <= 0}
+        disabled={disableBack}
         aria-label="Previous move"
         title="Previous move (←)"
         className="rounded bg-[#262522] p-2 text-[#c9c7c3] transition hover:bg-[#312e2b] hover:text-white disabled:opacity-40"
@@ -76,7 +84,7 @@ export function NavigationBar({
       <button
         type="button"
         onClick={onNext}
-        disabled={currentPly >= totalPlies}
+        disabled={disableNext}
         aria-label="Next move"
         title="Next move (→)"
         className="rounded bg-[#262522] p-2 text-[#c9c7c3] transition hover:bg-[#312e2b] hover:text-white disabled:opacity-40"
@@ -87,7 +95,7 @@ export function NavigationBar({
       <button
         type="button"
         onClick={onEnd}
-        disabled={currentPly >= totalPlies}
+        disabled={disableEnd}
         aria-label="Jump to end"
         title="End (End)"
         className="rounded bg-[#262522] p-2 text-[#c9c7c3] transition hover:bg-[#312e2b] hover:text-white disabled:opacity-40"

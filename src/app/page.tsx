@@ -13,8 +13,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   Clock,
-  ChevronLeft,
-  ChevronRight,
   Undo2,
   Eye,
   RefreshCw,
@@ -24,6 +22,7 @@ import {
   analyzeGame,
   getFenTurn,
   parseBaseClockFromHeader,
+  type AnalyzedPvLine,
   type ParsedMove,
 } from "@/lib/analysis/game-analyzer";
 import { createBrowserStockfishEngine } from "@/lib/engine/stockfish-worker";
@@ -31,7 +30,14 @@ import {
   buildStrengthUciConfig,
   evaluateTerminalPosition,
   type ChessEngine,
+  type PositionEval,
+  type PvLine,
 } from "@/lib/engine/engine-evaluator";
+import {
+  isTablebaseEligible,
+  querySyzygyTablebase,
+  type TablebaseResult,
+} from "@/lib/engine/tablebase";
 import { formatEvalLabel } from "@/lib/engine/uci-parser";
 import {
   gradeUserPlayMove,
@@ -53,6 +59,7 @@ import type { BoardArrow } from "@/components/chess/BoardOverlays";
 import { EvalBar } from "@/components/chess/EvalBar";
 import { EvalGraph } from "@/components/chess/EvalGraph";
 import { AccuracyHeader } from "@/components/review/AccuracyHeader";
+import { AnalysisPanel } from "@/components/review/AnalysisPanel";
 import { CoachCard } from "@/components/review/CoachCard";
 import { MoveBadgeSummary } from "@/components/review/MoveBadgeSummary";
 import { MoveListReview } from "@/components/review/MoveListReview";
@@ -63,14 +70,33 @@ import { UsernameImporter } from "@/components/importer/UsernameImporter";
 type SidebarTab = "review" | "analysis" | "moves";
 type ImporterTab = "samples" | "chesscom" | "pgn";
 
-interface CustomPvPreview {
-  multipv: number;
-  cp: number;
-  mate?: number;
-  pvSan: string[];
-  fenStart: string;
-  ply: number;
-  runId: number;
+function buildPvArrowsFromFen(
+  fen: string,
+  lines?: ReadonlyArray<AnalyzedPvLine | PvLine>
+): BoardArrow[] {
+  if (!lines || lines.length === 0) return [];
+  const arrows: BoardArrow[] = [];
+  const primary = lines[0]?.pvSan[0];
+  const alt = lines[1]?.pvSan[0];
+
+  const resolveFirst = (san: string | undefined): { from: Square; to: Square } | null => {
+    if (!san) return null;
+    try {
+      const m = new Chess(fen).move(san);
+      return m ? { from: m.from, to: m.to } : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const pMove = resolveFirst(primary);
+  if (pMove) arrows.push({ ...pMove, category: "best" });
+
+  const aMove = resolveFirst(alt);
+  if (aMove && (!pMove || aMove.from !== pMove.from || aMove.to !== pMove.to)) {
+    arrows.push({ ...aMove, category: "alternative" });
+  }
+  return arrows;
 }
 
 function normalizeInputToPgn(raw: string): string {
@@ -106,6 +132,8 @@ export default function GameReviewPage() {
     storyline,
     retryState,
     playMode,
+    variationTree,
+    activeVariationNodeId,
     setPgnInput,
     setAnalyzing,
     setAnalysisError,
@@ -117,12 +145,19 @@ export default function GameReviewPage() {
     setStoryline,
     clearExplanations,
     jumpToPly,
+    jumpToVariationNode,
     goToStart,
     prevMove,
     nextMove,
     goToEnd,
     nextKeyMoment,
     flipBoard,
+    playAnalysisMove,
+    explorePvLineInTree,
+    attachVariationEval,
+    deleteVariationBranchById,
+    promoteVariationById,
+    clearVariationTree,
     toggleShowBestMove,
     stepBestMoveLine,
     startRetryMode,
@@ -152,8 +187,10 @@ export default function GameReviewPage() {
   const [analysisRunId, setAnalysisRunId] = useState(0);
   const [failedExplainPlies, setFailedExplainPlies] = useState<Record<string, boolean>>({});
   const [customPgnDraft, setCustomPgnDraft] = useState(SAMPLE_GAMES[1].pgn);
-  const [previewCustomPv, setPreviewCustomPv] = useState<CustomPvPreview | null>(null);
-  const [customPvStep, setCustomPvStep] = useState(0);
+  const [liveMainEval, setLiveMainEval] = useState<PositionEval | null>(null);
+  const [isEvaluatingAnalysisLive, setIsEvaluatingAnalysisLive] = useState(false);
+  const [tablebaseResult, setTablebaseResult] = useState<TablebaseResult | null>(null);
+  const [tablebaseLoading, setTablebaseLoading] = useState(false);
   const [geminiApiKey, setGeminiApiKey] = useState("");
 
   useEffect(() => {
@@ -184,18 +221,19 @@ export default function GameReviewPage() {
     [clearExplanations]
   );
 
-  const activeCustomPv =
-    sidebarTab === "analysis" &&
-    previewCustomPv &&
-    previewCustomPv.ply === currentPly &&
-    previewCustomPv.runId === analysisRunId
-      ? previewCustomPv
-      : null;
+  const activeVariationNode = useMemo(
+    () =>
+      activeVariationNodeId ? variationTree.nodes[activeVariationNodeId] ?? null : null,
+    [activeVariationNodeId, variationTree.nodes]
+  );
 
   const engineRef = useRef<ChessEngine | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const playEngineRef = useRef<ChessEngine | null>(null);
   const playActionTokenRef = useRef(0);
+  const playReturnTabRef = useRef<SidebarTab>("review");
+  const analysisLiveEngineRef = useRef<ChessEngine | null>(null);
+  const analysisLiveTokenRef = useRef(0);
 
   const getPlayEngine = useCallback(() => {
     if (!playEngineRef.current) {
@@ -210,11 +248,28 @@ export default function GameReviewPage() {
     playEngineRef.current = null;
   }, []);
 
+  const getAnalysisLiveEngine = useCallback(() => {
+    if (!analysisLiveEngineRef.current) {
+      analysisLiveEngineRef.current = createBrowserStockfishEngine();
+    }
+    return analysisLiveEngineRef.current;
+  }, []);
+
+  const disposeAnalysisLiveEngine = useCallback(() => {
+    analysisLiveTokenRef.current += 1;
+    analysisLiveEngineRef.current?.dispose();
+    analysisLiveEngineRef.current = null;
+    setIsEvaluatingAnalysisLive(false);
+  }, []);
+
   const runAnalysis = useCallback(
     async (pgn: string, autoFlipColor?: "white" | "black" | "preserve") => {
       abortRef.current?.abort();
       engineRef.current?.dispose();
       disposePlayEngine();
+      disposeAnalysisLiveEngine();
+      setLiveMainEval(null);
+      setTablebaseResult(null);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -264,7 +319,7 @@ export default function GameReviewPage() {
         }
       }
     },
-    [depth, disposePlayEngine, flipBoard, setAnalysis, setAnalysisError, setAnalyzing, setCoachColor, setPgnInput]
+    [depth, disposeAnalysisLiveEngine, disposePlayEngine, flipBoard, setAnalysis, setAnalysisError, setAnalyzing, setCoachColor, setPgnInput]
   );
 
   // Fetch / re-fetch grounded Game Storyline when analysis finishes, coachColor toggles, or persona changes
@@ -364,6 +419,7 @@ export default function GameReviewPage() {
       abortRef.current?.abort();
       engineRef.current?.dispose();
       disposePlayEngine();
+      disposeAnalysisLiveEngine();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -548,49 +604,55 @@ export default function GameReviewPage() {
       };
     }
 
-    if (activeCustomPv) {
-      const c = new Chess(activeCustomPv.fenStart);
-      let lastPreviewMove: { from: Square; to: Square } | null = null;
-      const pvArrows: BoardArrow[] = [];
-      for (let i = 0; i < customPvStep && i < activeCustomPv.pvSan.length; i++) {
-        try {
-          const mv = c.move(activeCustomPv.pvSan[i]);
-          if (mv) lastPreviewMove = { from: mv.from, to: mv.to };
-        } catch {
-          break;
-        }
-      }
-      if (customPvStep === 0 && activeCustomPv.pvSan[0]) {
-        try {
-          const probe = new Chess(activeCustomPv.fenStart);
-          const first = probe.move(activeCustomPv.pvSan[0]);
-          if (first) {
-            pvArrows.push({ from: first.from, to: first.to, category: "best" });
-          }
-        } catch {
-          // Ignore invalid PV move
-        }
-      }
+    if (activeVariationNode) {
+      const anchorCp =
+        activeVariationNode.anchorPly === 0
+          ? analysis?.startEval?.whiteCp ?? 20
+          : analysis?.moves[activeVariationNode.anchorPly - 1]?.whiteCp ?? 0;
+      const anchorMate =
+        activeVariationNode.anchorPly === 0
+          ? analysis?.startEval?.whiteMate
+          : analysis?.moves[activeVariationNode.anchorPly - 1]?.whiteMate;
+      const evalData = activeVariationNode.eval;
+      const whiteCp = evalData ? evalData.whiteCp : anchorCp;
+      const whiteMate = evalData ? evalData.whiteMate : anchorMate;
+      const arrows = evalData
+        ? buildPvArrowsFromFen(activeVariationNode.fenAfter, evalData.lines)
+        : [];
       return {
-        fen: c.fen(),
-        lastMove: lastPreviewMove,
+        fen: activeVariationNode.fenAfter,
+        lastMove: { from: activeVariationNode.from, to: activeVariationNode.to },
         badge: null,
-        arrows: pvArrows,
-        whiteCp: activeCustomPv.cp,
-        whiteMate: activeCustomPv.mate,
-        evalLabel: formatEvalLabel(activeCustomPv.cp, activeCustomPv.mate),
+        arrows,
+        whiteCp,
+        whiteMate,
+        evalLabel: formatEvalLabel(whiteCp, whiteMate, evalData?.isCheckmate),
       };
     }
 
     if (!activeMove) {
+      const startLines =
+        liveMainEval?.fen === defaultFen
+          ? liveMainEval.lines
+          : analysis?.startEval?.pvLines;
+      const arrows =
+        sidebarTab === "analysis" ? buildPvArrowsFromFen(defaultFen, startLines) : [];
+      const whiteCp =
+        liveMainEval?.fen === defaultFen
+          ? liveMainEval.whiteCp
+          : analysis?.startEval?.whiteCp ?? 20;
+      const whiteMate =
+        liveMainEval?.fen === defaultFen
+          ? liveMainEval.whiteMate
+          : analysis?.startEval?.whiteMate;
       return {
         fen: defaultFen,
         lastMove: null,
         badge: null,
-        arrows: [] as BoardArrow[],
-        whiteCp: analysis?.startEval?.whiteCp ?? 20,
-        whiteMate: analysis?.startEval?.whiteMate,
-        evalLabel: analysis?.startEval?.evalLabel ?? "+0.2",
+        arrows,
+        whiteCp,
+        whiteMate,
+        evalLabel: formatEvalLabel(whiteCp, whiteMate, liveMainEval?.isCheckmate),
       };
     }
 
@@ -638,6 +700,12 @@ export default function GameReviewPage() {
       if (bestFrom !== activeMove.from || bestTo !== activeMove.to) {
         arrows.push({ from: bestFrom, to: bestTo, category: "best" });
       }
+    } else if (sidebarTab === "analysis" && !isError && analysis) {
+      const nextMove = analysis.moves[activeMove.ply];
+      const replyLines =
+        nextMove?.pvLines ??
+        (liveMainEval?.fen === activeMove.fenAfter ? liveMainEval.lines : undefined);
+      arrows.push(...buildPvArrowsFromFen(activeMove.fenAfter, replyLines));
     }
 
     return {
@@ -650,16 +718,141 @@ export default function GameReviewPage() {
       evalLabel: activeMove.evalLabel,
     };
   }, [
-    activeCustomPv,
     activeMove,
-    analysis?.startEval,
-    analysis?.startFen,
+    activeVariationNode,
+    analysis,
     bestMovePreviewIndex,
-    customPvStep,
+    liveMainEval,
     playMode,
     retryState,
     showBestMove,
+    sidebarTab,
   ]);
+
+  // Keep Review tab aligned on mainline when exiting Play Mode (never trapped on an invisible variation)
+  useEffect(() => {
+    if (sidebarTab === "review" && !playMode.active && activeVariationNodeId) {
+      jumpToPly(currentPly);
+    }
+  }, [activeVariationNodeId, currentPly, jumpToPly, playMode.active, sidebarTab]);
+
+  // Live Stockfish MultiPV=3 evaluation for explored Analysis variation nodes or missing end-of-game lines
+  useEffect(() => {
+    if (
+      sidebarTab !== "analysis" ||
+      analysisStatus !== "complete" ||
+      !analysis ||
+      playMode.active ||
+      retryState.active
+    ) {
+      setIsEvaluatingAnalysisLive(false);
+      return;
+    }
+
+    const needsVarEval = Boolean(activeVariationNode && !activeVariationNode.eval);
+    const needsEndMainEval =
+      !activeVariationNode &&
+      currentPly >= analysis.moves.length &&
+      liveMainEval?.fen !== boardView.fen;
+    const needsStartMainEval =
+      !activeVariationNode &&
+      currentPly === 0 &&
+      !analysis.startEval?.pvLines?.length &&
+      liveMainEval?.fen !== boardView.fen;
+
+    if (!needsVarEval && !needsEndMainEval && !needsStartMainEval) {
+      setIsEvaluatingAnalysisLive(false);
+      return;
+    }
+
+    const targetFen = boardView.fen;
+    const terminal = evaluateTerminalPosition(targetFen);
+    if (terminal) {
+      setIsEvaluatingAnalysisLive(false);
+      if (activeVariationNode) {
+        attachVariationEval(activeVariationNode.id, terminal);
+      } else {
+        setLiveMainEval(terminal);
+      }
+      return;
+    }
+
+    const token = ++analysisLiveTokenRef.current;
+    let cancelled = false;
+    setIsEvaluatingAnalysisLive(true);
+
+    getAnalysisLiveEngine()
+      .evaluatePosition(targetFen, Math.min(depth, 14), 3)
+      .then((res) => {
+        if (cancelled || token !== analysisLiveTokenRef.current) return;
+        if (activeVariationNode) {
+          attachVariationEval(activeVariationNode.id, res);
+        } else {
+          setLiveMainEval(res);
+        }
+      })
+      .catch(() => {
+        // Worker disposed or interrupted cleanly
+      })
+      .finally(() => {
+        if (!cancelled && token === analysisLiveTokenRef.current) {
+          setIsEvaluatingAnalysisLive(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      analysisLiveTokenRef.current += 1;
+      setIsEvaluatingAnalysisLive(false);
+    };
+  }, [
+    activeVariationNode,
+    analysis,
+    analysisStatus,
+    attachVariationEval,
+    boardView.fen,
+    currentPly,
+    depth,
+    getAnalysisLiveEngine,
+    liveMainEval?.fen,
+    playMode.active,
+    retryState.active,
+    sidebarTab,
+  ]);
+
+  // On-demand Lichess Syzygy 7-man tablebase lookup in Analysis mode for <= 7-piece endgames
+  useEffect(() => {
+    if (
+      sidebarTab !== "analysis" ||
+      analysisStatus !== "complete" ||
+      playMode.active ||
+      !isTablebaseEligible(boardView.fen)
+    ) {
+      setTablebaseResult(null);
+      setTablebaseLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setTablebaseResult(null);
+    setTablebaseLoading(true);
+
+    querySyzygyTablebase(boardView.fen, { signal: controller.signal })
+      .then((res) => {
+        if (!controller.signal.aborted) {
+          setTablebaseResult(res);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setTablebaseLoading(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [analysisStatus, boardView.fen, playMode.active, sidebarTab]);
 
   const preEvaluatePlayTurn = useCallback(
     async (fen: string, token: number) => {
@@ -789,13 +982,13 @@ export default function GameReviewPage() {
 
   const handleStartPlayMode = useCallback(
     (mode: PlayStartMode = "board") => {
+      playReturnTabRef.current = mode === "before-move" ? "review" : sidebarTab;
       const token = ++playActionTokenRef.current;
-      const customFen = mode === "board" && activeCustomPv ? boardView.fen : null;
-      startPlayMode(mode, customFen);
+      startPlayMode(mode);
       setSidebarTab("review");
       kickOffPlayTurn(token);
     },
-    [activeCustomPv, boardView.fen, kickOffPlayTurn, startPlayMode]
+    [kickOffPlayTurn, sidebarTab, startPlayMode]
   );
 
   const handleUndoPlayMove = useCallback(() => {
@@ -816,7 +1009,12 @@ export default function GameReviewPage() {
   const handleExitPlayMode = useCallback(() => {
     disposePlayEngine();
     exitPlayMode();
-  }, [disposePlayEngine, exitPlayMode]);
+    const returnTab = playReturnTabRef.current;
+    setSidebarTab(returnTab);
+    if (returnTab === "review" && useReviewStore.getState().activeVariationNodeId) {
+      jumpToPly(useReviewStore.getState().currentPly);
+    }
+  }, [disposePlayEngine, exitPlayMode, jumpToPly]);
 
   const handlePlayBoardMove = useCallback(
     async (from: string, to: string, promotion?: string) => {
@@ -1152,7 +1350,10 @@ export default function GameReviewPage() {
                     (playMode.active &&
                       !playMode.gameOver &&
                       !playMode.isThinking &&
-                      getFenTurn(playMode.fen) === playMode.userColor)
+                      getFenTurn(playMode.fen) === playMode.userColor) ||
+                    (sidebarTab === "analysis" &&
+                      analysisStatus === "complete" &&
+                      Boolean(analysis))
                   }
                   theme={boardTheme}
                   onMove={(from, to, promotion) => {
@@ -1160,6 +1361,8 @@ export default function GameReviewPage() {
                       submitRetryMove(from, to, promotion);
                     } else if (playMode.active) {
                       void handlePlayBoardMove(from, to, promotion);
+                    } else if (sidebarTab === "analysis" && analysis) {
+                      playAnalysisMove(from, to, promotion);
                     }
                   }}
                 />
@@ -1295,6 +1498,10 @@ export default function GameReviewPage() {
                     currentPly={currentPly}
                     totalPlies={analysis.moves.length}
                     hasKeyMoments={hasKeyMoments}
+                    inVariation={Boolean(activeVariationNode)}
+                    canStepForwardInVariation={Boolean(
+                      activeVariationNode && activeVariationNode.childrenIds.length > 0
+                    )}
                     onStart={goToStart}
                     onPrev={prevMove}
                     onNextKeyMoment={nextKeyMoment}
@@ -1371,7 +1578,12 @@ export default function GameReviewPage() {
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => setSidebarTab(t.id)}
+                    onClick={() => {
+                      setSidebarTab(t.id);
+                      if (t.id === "review" && activeVariationNodeId) {
+                        jumpToPly(currentPly);
+                      }
+                    }}
                     className={`rounded py-1.5 transition ${
                       sidebarTab === t.id
                         ? "bg-[#312e2b] text-white shadow"
@@ -1460,198 +1672,27 @@ export default function GameReviewPage() {
               )}
 
               {sidebarTab === "analysis" && (
-                <div className="space-y-3">
-                  <div className="rounded-md border border-[#3d3b38] bg-[#21201d] p-3">
-                    <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-[#9e9c98]">
-                      <span>Engine Lines (MultiPV = 3)</span>
-                      <span className="font-mono text-[10px]">Depth {analyzedDepth}</span>
-                    </div>
-                    {(() => {
-                      const pvLines = activeMove?.pvLines ?? analysis.startEval?.pvLines ?? [];
-                      const fenStart = activeMove ? activeMove.fenBefore : analysis.startFen;
-                      if (pvLines.length > 0) {
-                        return (
-                          <div className="mt-2 space-y-2 text-xs">
-                            <div className="text-[10px] text-[#9e9c98]">
-                              Click any line to preview on board ({activeCustomPv ? `Previewing PV${activeCustomPv.multipv}` : "top variations"})
-                            </div>
-                            {pvLines.slice(0, 3).map((line, i) => {
-                              const label = formatEvalLabel(line.cp, line.mate);
-                              const isSelected = activeCustomPv?.multipv === line.multipv;
-                              const colorClass =
-                                i === 0
-                                  ? "text-[#96bc4b]"
-                                  : i === 1
-                                  ? "text-[#5c8bb0]"
-                                  : "text-[#a88a68]";
-                              return (
-                                <div
-                                  key={line.multipv}
-                                  className={`rounded border p-2 transition ${
-                                    isSelected
-                                      ? "border-[#96bc4b] bg-[#2a2926]"
-                                      : "border-transparent bg-[#262522] hover:border-[#3d3b38]"
-                                  }`}
-                                >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        if (isSelected) {
-                                          setPreviewCustomPv(null);
-                                          setCustomPvStep(0);
-                                        } else {
-                                          setPreviewCustomPv({
-                                            multipv: line.multipv,
-                                            cp: line.cp,
-                                            mate: line.mate,
-                                            pvSan: line.pvSan,
-                                            fenStart,
-                                            ply: currentPly,
-                                            runId: analysisRunId,
-                                          });
-                                          setCustomPvStep(Math.min(1, line.pvSan.length));
-                                        }
-                                      }}
-                                      className={`flex-1 text-left font-bold ${colorClass}`}
-                                    >
-                                      PV{line.multipv}{" "}
-                                      {i === 0 ? "(Best)" : i === 1 ? "(2nd)" : "(3rd)"}:{" "}
-                                      {line.pvSan[0] || "—"}
-                                    </button>
-                                    <div className="flex items-center gap-1">
-                                      {isSelected && (
-                                        <>
-                                          <button
-                                            type="button"
-                                            aria-label={`Step PV${line.multipv} back`}
-                                            disabled={customPvStep <= 0}
-                                            onClick={() => setCustomPvStep((s) => Math.max(0, s - 1))}
-                                            className="rounded bg-[#312e2b] p-0.5 text-white disabled:opacity-40"
-                                          >
-                                            <ChevronLeft className="h-3.5 w-3.5" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            aria-label={`Step PV${line.multipv} forward`}
-                                            disabled={
-                                              customPvStep >= Math.min(6, line.pvSan.length)
-                                            }
-                                            onClick={() =>
-                                              setCustomPvStep((s) =>
-                                                Math.min(Math.min(6, line.pvSan.length), s + 1)
-                                              )
-                                            }
-                                            className="rounded bg-[#312e2b] p-0.5 text-white disabled:opacity-40"
-                                          >
-                                            <ChevronRight className="h-3.5 w-3.5" />
-                                          </button>
-                                        </>
-                                      )}
-                                      <span className="rounded bg-[#312e2b] px-1.5 py-0.5 font-mono text-[11px] font-bold text-white">
-                                        {label}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="mt-1 flex flex-wrap gap-1 font-mono text-[11px]">
-                                    {line.pvSan.slice(0, 6).map((san, idx) => (
-                                      <button
-                                        key={`${line.multipv}-${san}-${idx}`}
-                                        type="button"
-                                        onClick={() => {
-                                          setPreviewCustomPv({
-                                            multipv: line.multipv,
-                                            cp: line.cp,
-                                            mate: line.mate,
-                                            pvSan: line.pvSan,
-                                            fenStart,
-                                            ply: currentPly,
-                                            runId: analysisRunId,
-                                          });
-                                          setCustomPvStep(idx + 1);
-                                        }}
-                                        className={`rounded px-1 py-0.5 transition ${
-                                          isSelected && idx + 1 === customPvStep
-                                            ? "bg-[#96bc4b] font-bold text-[#1a1917]"
-                                            : "text-[#c9c7c3] hover:bg-[#312e2b]"
-                                        }`}
-                                      >
-                                        {san}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      }
-                      if (activeMove) {
-                        return (
-                          <div className="mt-2 space-y-2 text-xs">
-                            <div className="rounded bg-[#262522] p-2">
-                              <div className="font-bold text-[#96bc4b]">
-                                PV1 (Best): {activeMove.bestMoveSan}
-                              </div>
-                              <div className="mt-1 font-mono text-[11px] text-[#c9c7c3]">
-                                {activeMove.bestMovePvSan.slice(0, 6).join(" ")}
-                              </div>
-                            </div>
-                            {activeMove.altPvSan.length > 0 && (
-                              <div className="rounded bg-[#262522] p-2">
-                                <div className="font-bold text-[#5c8bb0]">PV2 (Alternative)</div>
-                                <div className="mt-1 font-mono text-[11px] text-[#c9c7c3]">
-                                  {activeMove.altPvSan.slice(0, 6).join(" ")}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      }
-                      return (
-                        <p className="mt-2 text-xs text-[#9e9c98]">
-                          Step to any move to inspect Stockfish principal variations.
-                        </p>
-                      );
-                    })()}
-                  </div>
-
-                  {activeMove && (
-                    <div className="rounded-md border border-[#3d3b38] bg-[#21201d] p-3">
-                      <div className="text-[11px] font-semibold uppercase tracking-wider text-[#9e9c98]">
-                        Deterministic Tactical Tags
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        <span className="rounded bg-[#312e2b] px-2 py-0.5 text-[11px] text-[#c9c7c3]">
-                          Phase: {activeMove.tacticalContext.gamePhase}
-                        </span>
-                        <span className="rounded bg-[#312e2b] px-2 py-0.5 text-[11px] text-[#c9c7c3]">
-                          ΔWP: {activeMove.classification.deltaWP.toFixed(1)}%
-                        </span>
-                        {activeMove.materialSacrificed > 0 && (
-                          <span className="rounded bg-[#1baca6]/20 px-2 py-0.5 text-[11px] font-bold text-[#1baca6]">
-                            Sacrifice: {activeMove.materialSacrificed} pts
-                          </span>
-                        )}
-                        {activeMove.tacticalContext.tags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded bg-[#96bc4b]/15 px-2 py-0.5 font-mono text-[11px] text-[#96bc4b]"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <EvalGraph
-                    moves={analysis.moves}
-                    currentPly={currentPly}
-                    startEval={analysis.startEval}
-                    onSelectPly={jumpToPly}
-                  />
-                </div>
+                <AnalysisPanel
+                  analysis={analysis}
+                  currentPly={currentPly}
+                  boardFen={boardView.fen}
+                  analyzedDepth={analyzedDepth}
+                  variationTree={variationTree}
+                  activeVariationNode={activeVariationNode}
+                  liveMainEval={
+                    liveMainEval && liveMainEval.fen === boardView.fen ? liveMainEval : null
+                  }
+                  isEvaluatingLive={isEvaluatingAnalysisLive}
+                  tablebase={tablebaseResult}
+                  tablebaseLoading={tablebaseLoading}
+                  onSelectVariationNode={jumpToVariationNode}
+                  onExitVariation={() => jumpToPly(activeVariationNode?.anchorPly ?? currentPly)}
+                  onExplorePvMoves={explorePvLineInTree}
+                  onPromoteVariation={promoteVariationById}
+                  onDeleteVariation={deleteVariationBranchById}
+                  onClearVariations={clearVariationTree}
+                  onSelectPly={jumpToPly}
+                />
               )}
 
               {sidebarTab === "moves" && (
@@ -1660,6 +1701,9 @@ export default function GameReviewPage() {
                   opening={analysis.opening}
                   currentPly={currentPly}
                   onSelectPly={jumpToPly}
+                  variationTree={variationTree}
+                  activeVariationNodeId={activeVariationNodeId}
+                  onSelectVariationNode={jumpToVariationNode}
                 />
               )}
             </div>

@@ -15,6 +15,13 @@ import { MoveListReview } from "@/components/review/MoveListReview";
 import { UsernameImporter } from "@/components/importer/UsernameImporter";
 import { GameSelectionList } from "@/components/importer/GameSelectionList";
 import { PlayModePanel } from "@/components/review/PlayModePanel";
+import { AnalysisPanel } from "@/components/review/AnalysisPanel";
+import {
+  addVariationLine,
+  createEmptyVariationTree,
+} from "@/lib/analysis/variation-tree";
+import type { GameAnalysis } from "@/lib/analysis/game-analyzer";
+import type { TablebaseResult } from "@/lib/engine/tablebase";
 import type { PlayModeState } from "@/lib/store/useReviewStore";
 
 describe("UI components & visual geometry", () => {
@@ -169,6 +176,61 @@ describe("UI components & visual geometry", () => {
       expect(handlers.onNext).toHaveBeenCalledTimes(1);
       expect(handlers.onEnd).toHaveBeenCalledTimes(1);
       expect(handlers.onFlip).toHaveBeenCalledTimes(1);
+    });
+
+    it("NavigationBar keeps Start/Prev enabled at ply 0 and End/Next properly gated when inside a variation", () => {
+      const handlers = {
+        onStart: vi.fn(),
+        onPrev: vi.fn(),
+        onNextKeyMoment: vi.fn(),
+        onNext: vi.fn(),
+        onEnd: vi.fn(),
+        onFlip: vi.fn(),
+      };
+      const { rerender } = render(
+        <NavigationBar
+          currentPly={0}
+          totalPlies={20}
+          hasKeyMoments={false}
+          inVariation={true}
+          canStepForwardInVariation={true}
+          {...handlers}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: /jump to start/i })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /previous move/i })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /next move/i })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /jump to end/i })).not.toBeDisabled();
+
+      rerender(
+        <NavigationBar
+          currentPly={20}
+          totalPlies={20}
+          hasKeyMoments={false}
+          inVariation={true}
+          canStepForwardInVariation={false}
+          {...handlers}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: /jump to start/i })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /previous move/i })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /next move/i })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /jump to end/i })).not.toBeDisabled();
+
+      rerender(
+        <NavigationBar
+          currentPly={20}
+          totalPlies={20}
+          hasKeyMoments={false}
+          inVariation={true}
+          canStepForwardInVariation={true}
+          {...handlers}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: /next move/i })).not.toBeDisabled();
     });
 
     it("AccuracyHeader & MoveBadgeSummary display CAPS2 percentages, Elo, and badge counts", () => {
@@ -1204,6 +1266,378 @@ describe("UI components & visual geometry", () => {
       const fixPlayBtn = screen.getByRole("button", { name: /fix & play out/i });
       fireEvent.click(fixPlayBtn);
       expect(onFixAndPlayOut).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("AnalysisPanel variation tree & Syzygy 7-man tablebase UI", () => {
+    function buildAnalysisPanelFixture(): GameAnalysis {
+      return {
+        headers: { White: "W", Black: "B", Result: "*" },
+        startFen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        startEval: {
+          whiteCp: 25,
+          evalLabel: "+0.3",
+          pvLines: [{ multipv: 1, cp: 25, pvSan: ["e4", "e5"] }],
+        },
+        opening: {
+          opening: { eco: "C20", name: "King's Pawn Game", moves: "1. e4 e5", fenKey: "" },
+          bookPlies: 1,
+          outOfBookPly: 2,
+          outOfBookMoveNumber: 1,
+          plyIsBook: [true, false],
+          plyOpenings: [null, null],
+          insight: "Open game",
+        },
+        summary: {
+          white: {
+            accuracy: 92,
+            estimatedElo: 1800,
+            badgeCounts: {
+              Brilliant: 0, Great: 0, Best: 0, Excellent: 0, Good: 0, Book: 1,
+              Inaccuracy: 0, Mistake: 0, Miss: 0, Blunder: 0, Forced: 0,
+            },
+            phaseAccuracies: { opening: 100, middlegame: 92, endgame: 100 },
+          },
+          black: {
+            accuracy: 80,
+            estimatedElo: 1400,
+            badgeCounts: {
+              Brilliant: 0, Great: 0, Best: 0, Excellent: 0, Good: 0, Book: 0,
+              Inaccuracy: 1, Mistake: 0, Miss: 0, Blunder: 0, Forced: 0,
+            },
+            phaseAccuracies: { opening: 100, middlegame: 80, endgame: 100 },
+          },
+        },
+        moves: [
+          {
+            ply: 1,
+            moveNumber: 1,
+            color: "w",
+            san: "e4",
+            uci: "e2e4",
+            from: "e2",
+            to: "e4",
+            fenBefore: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            fenAfter: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            whiteCp: 25,
+            evalLabel: "+0.3",
+            bestMoveUci: "e2e4",
+            bestMoveSan: "e4",
+            bestMovePvSan: ["e4", "e5"],
+            altPvSan: [],
+            pvLines: [{ multipv: 1, cp: 25, pvSan: ["e4", "e5"] }],
+            materialSacrificed: 0,
+            classification: {
+              badge: "Book",
+              deltaWP: 0,
+              accuracy: 100,
+              color: "#a88a68",
+              symbol: "📖",
+              isBlunder: false,
+              isKeyMoment: false,
+            },
+            tacticalContext: {
+              tags: ["CENTER_CONTROL"],
+              isCheck: false,
+              isCastle: false,
+              gamePhase: "Opening",
+            },
+          },
+          {
+            ply: 2,
+            moveNumber: 1,
+            color: "b",
+            san: "h6",
+            uci: "h7h6",
+            from: "h7",
+            to: "h6",
+            fenBefore: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            fenAfter: "rnbqkbnr/ppppppp1/7p/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+            whiteCp: 95,
+            evalLabel: "+1.0",
+            bestMoveUci: "e7e5",
+            bestMoveSan: "e5",
+            bestMovePvSan: ["e5", "Nf3"],
+            altPvSan: ["c5", "Nf3"],
+            pvLines: [
+              { multipv: 1, cp: 20, pvSan: ["e5", "Nf3", "Nc6"] },
+              { multipv: 2, cp: 32, pvSan: ["c5", "Nf3"] },
+            ],
+            materialSacrificed: 0,
+            classification: {
+              badge: "Inaccuracy",
+              deltaWP: 6.5,
+              accuracy: 74,
+              color: "#f0c15c",
+              symbol: "?!",
+              isBlunder: false,
+              isKeyMoment: false,
+            },
+            tacticalContext: {
+              tags: [],
+              isCheck: false,
+              isCastle: false,
+              gamePhase: "Opening",
+            },
+          },
+        ],
+      };
+    }
+
+    it("renders current-board MultiPV lines, stronger-alternative strip, variation breadcrumb, and Syzygy tablebase card", () => {
+      const analysis = buildAnalysisPanelFixture();
+      let tree = createEmptyVariationTree();
+      const added = addVariationLine(tree, {
+        anchorPly: 1,
+        anchorFen: analysis.moves[0].fenAfter,
+        parentId: null,
+        sanMoves: ["c5", "Nf3"],
+      });
+      tree = added.tree;
+      const activeVarNode = tree.nodes[added.lastNodeId!];
+
+      const onExplorePvMoves = vi.fn();
+      const onPromoteVariation = vi.fn();
+      const onDeleteVariation = vi.fn();
+      const onExitVariation = vi.fn();
+
+      const tablebase: TablebaseResult = {
+        fen: "8/8/8/8/8/6K1/4Q3/6k1 w - - 0 1",
+        turn: "w",
+        category: "win",
+        dtz: 1,
+        dtm: 1,
+        checkmate: false,
+        stalemate: false,
+        insufficientMaterial: false,
+        pieceCount: 3,
+        whiteVerdict: "White Wins",
+        headline: "Syzygy 7-Man: White Wins (DTM 1 · DTZ 1)",
+        bestMoveSan: "Qd1#",
+        bestMoveUci: "e2d1",
+        moves: [
+          {
+            uci: "e2d1",
+            san: "Qd1#",
+            opponentCategory: "loss",
+            outcomeForMover: "win",
+            dtz: -1,
+            dtm: -1,
+            zeroing: false,
+            checkmate: true,
+            stalemate: false,
+          },
+        ],
+      };
+
+      const { rerender } = render(
+        <AnalysisPanel
+          analysis={analysis}
+          currentPly={1}
+          analyzedDepth={14}
+          variationTree={tree}
+          activeVariationNode={activeVarNode}
+          liveMainEval={null}
+          isEvaluatingLive={true}
+          tablebase={tablebase}
+          tablebaseLoading={false}
+          onSelectVariationNode={vi.fn()}
+          onExitVariation={onExitVariation}
+          onExplorePvMoves={onExplorePvMoves}
+          onPromoteVariation={onPromoteVariation}
+          onDeleteVariation={onDeleteVariation}
+          onClearVariations={vi.fn()}
+          onSelectPly={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/Syzygy 7-Man: White Wins/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /Qd1#/i }));
+      expect(onExplorePvMoves).toHaveBeenCalledWith({
+        anchorPly: 1,
+        sanMoves: ["Qd1#"],
+        stepIndex: 0,
+        parentNodeId: activeVarNode.id,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Promote/i }));
+      expect(onPromoteVariation).toHaveBeenCalledWith(activeVarNode.id);
+
+      fireEvent.click(screen.getByRole("button", { name: /Delete/i }));
+      expect(onDeleteVariation).toHaveBeenCalledWith(activeVarNode.id);
+
+      fireEvent.click(screen.getByRole("button", { name: /Mainline/i }));
+      expect(onExitVariation).toHaveBeenCalledTimes(1);
+
+      // Rerender on mainline ply 1 (before 1...h6): displays PV1..PV2 from current board (next move pvLines)
+      rerender(
+        <AnalysisPanel
+          analysis={analysis}
+          currentPly={1}
+          analyzedDepth={14}
+          variationTree={tree}
+          activeVariationNode={null}
+          liveMainEval={null}
+          isEvaluatingLive={false}
+          tablebase={null}
+          tablebaseLoading={false}
+          onSelectVariationNode={vi.fn()}
+          onExitVariation={onExitVariation}
+          onExplorePvMoves={onExplorePvMoves}
+          onPromoteVariation={onPromoteVariation}
+          onDeleteVariation={onDeleteVariation}
+          onClearVariations={vi.fn()}
+          onSelectPly={vi.fn()}
+        />
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /PV1 \(Best\): e5/i }));
+      expect(onExplorePvMoves).toHaveBeenCalledWith({
+        anchorPly: 1,
+        sanMoves: ["e5", "Nf3", "Nc6"],
+        stepIndex: 0,
+        parentNodeId: null,
+      });
+    });
+
+    it("renders interactive variation branches inside MoveListReview when variationTree is provided", () => {
+      const analysis = buildAnalysisPanelFixture();
+      let tree = createEmptyVariationTree();
+      const added = addVariationLine(tree, {
+        anchorPly: 1,
+        anchorFen: analysis.moves[0].fenAfter,
+        parentId: null,
+        sanMoves: ["c5", "Nf3"],
+      });
+      tree = added.tree;
+      const onSelectVariationNode = vi.fn();
+
+      render(
+        <MoveListReview
+          moves={analysis.moves}
+          opening={analysis.opening}
+          currentPly={1}
+          onSelectPly={vi.fn()}
+          variationTree={tree}
+          activeVariationNodeId={added.nodeIds[0]}
+          onSelectVariationNode={onSelectVariationNode}
+        />
+      );
+
+      const branchContainers = screen.getAllByTestId("moves-variation-branch");
+      expect(branchContainers.length).toBeGreaterThanOrEqual(1);
+      expect(branchContainers[0].textContent).toContain("c5");
+      const branchMoveBtn = screen.getByRole("button", { name: /Nf3/i });
+      fireEvent.click(branchMoveBtn);
+      expect(onSelectVariationNode).toHaveBeenCalledWith(added.nodeIds[1]);
+    });
+
+    it("ignores mismatched stale liveMainEval/tablebase when boardFen differs and disambiguates Cursed Win / Blessed Loss side", () => {
+      const startFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+      const endFen = "8/8/8/8/8/6K1/4Q3/6k1 w - - 0 1";
+      const base = buildAnalysisPanelFixture();
+      const analysis: GameAnalysis = {
+        ...base,
+        startFen,
+      };
+
+      const staleTablebase: TablebaseResult = {
+        fen: endFen,
+        turn: "w",
+        category: "win",
+        dtz: 1,
+        dtm: 1,
+        checkmate: false,
+        stalemate: false,
+        insufficientMaterial: false,
+        pieceCount: 3,
+        whiteVerdict: "White Wins",
+        headline: "Syzygy 7-Man: White Wins (DTM 1)",
+        bestMoveSan: "Qd1#",
+        bestMoveUci: "e2d1",
+        moves: [
+          {
+            uci: "e2d1",
+            san: "Qd1#",
+            opponentCategory: "loss",
+            outcomeForMover: "win",
+            dtz: -1,
+            dtm: -1,
+            zeroing: false,
+            checkmate: true,
+            stalemate: false,
+          },
+        ],
+      };
+
+      const { rerender } = render(
+        <AnalysisPanel
+          analysis={analysis}
+          currentPly={0}
+          boardFen={startFen}
+          analyzedDepth={14}
+          variationTree={createEmptyVariationTree()}
+          activeVariationNode={null}
+          liveMainEval={{
+            fen: endFen,
+            depth: 12,
+            bestMoveUci: "e2d1",
+            bestMoveSan: "Qd1#",
+            whiteCp: 10000,
+            whiteMate: 1,
+            lines: [{ multipv: 1, cp: 10000, mate: 1, pvUci: ["e2d1"], pvSan: ["Qd1#"] }],
+          }}
+          isEvaluatingLive={false}
+          tablebase={staleTablebase}
+          tablebaseLoading={true}
+          onSelectVariationNode={vi.fn()}
+          onExitVariation={vi.fn()}
+          onExplorePvMoves={vi.fn()}
+          onPromoteVariation={vi.fn()}
+          onDeleteVariation={vi.fn()}
+          onClearVariations={vi.fn()}
+          onSelectPly={vi.fn()}
+        />
+      );
+
+      // Must show startEval ("e4") and Depth 14, never stale endFen PV ("Qd1#") or Depth 12
+      expect(screen.getByRole("button", { name: /PV1 \(Best\): e4/i })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Qd1#/i })).toBeNull();
+      expect(screen.getByText(/Depth 14/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Depth 12/i)).toBeNull();
+      // Must show Syzygy loading state instead of stale FEN tablebase result
+      expect(screen.getByText(/Probing Syzygy 7-man tablebase/i)).toBeInTheDocument();
+      expect(screen.queryByText(/White Wins/i)).toBeNull();
+
+      // Side-to-win disambiguation on Cursed Win / Blessed Loss when boardFen matches
+      rerender(
+        <AnalysisPanel
+          analysis={analysis}
+          currentPly={0}
+          boardFen={endFen}
+          analyzedDepth={14}
+          variationTree={createEmptyVariationTree()}
+          activeVariationNode={null}
+          liveMainEval={null}
+          isEvaluatingLive={false}
+          tablebase={{
+            ...staleTablebase,
+            turn: "b",
+            category: "cursed-win",
+            whiteVerdict: "Cursed Win",
+            headline: "Syzygy 7-Man: Cursed Win (DTM 130 · DTZ 112)",
+          }}
+          tablebaseLoading={false}
+          onSelectVariationNode={vi.fn()}
+          onExitVariation={vi.fn()}
+          onExplorePvMoves={vi.fn()}
+          onPromoteVariation={vi.fn()}
+          onDeleteVariation={vi.fn()}
+          onClearVariations={vi.fn()}
+          onSelectPly={vi.fn()}
+        />
+      );
+      expect(screen.getByText("Black Cursed Win")).toBeInTheDocument();
     });
   });
 });

@@ -522,4 +522,398 @@ describe("Play-from-Position store state", () => {
     expect(useReviewStore.getState().playMode.active).toBe(false);
     expect(useReviewStore.getState().playMode.moves).toHaveLength(0);
   });
+
+  it("supports Analysis variation tree exploration, branching, PV import, navigation, deletion, and Play Mode launch", () => {
+    const fixture = buildFixtureAnalysis();
+    const store = useReviewStore.getState();
+    store.setAnalysis(fixture);
+    store.setCoachColor("white");
+    store.jumpToPly(0);
+
+    // Playing mainline 1. e4 advances along mainline without creating a branch
+    const mainRes = store.playAnalysisMove("e2", "e4");
+    expect(mainRes).toEqual({ moved: true, mode: "mainline" });
+    expect(useReviewStore.getState().currentPly).toBe(1);
+    expect(useReviewStore.getState().activeVariationNodeId).toBeNull();
+
+    // Playing 1...c5 (diverging from mainline 1...e5) creates a variation anchored at ply 1
+    const var1 = store.playAnalysisMove("c7", "c5");
+    expect(var1.moved).toBe(true);
+    expect(var1.mode).toBe("variation");
+    expect(var1.nodeId).toBeTruthy();
+
+    // Extend with 2. Nf3 inside variation
+    const var2 = store.playAnalysisMove("g1", "f3");
+    expect(var2.moved).toBe(true);
+    expect(var2.mode).toBe("variation");
+    expect(useReviewStore.getState().activeVariationNodeId).toBe(var2.nodeId);
+
+    // Attach cached live Stockfish eval onto var2 node
+    const node2Fen = useReviewStore.getState().variationTree.nodes[var2.nodeId!].fenAfter;
+    store.attachVariationEval(var2.nodeId!, {
+      fen: node2Fen,
+      depth: 14,
+      bestMoveUci: "d7d6",
+      bestMoveSan: "d6",
+      whiteCp: 42,
+      lines: [{ multipv: 1, cp: 42, pvUci: ["d7d6"], pvSan: ["d6"] }],
+    });
+    expect(useReviewStore.getState().variationTree.nodes[var2.nodeId!].eval?.bestMoveSan).toBe("d6");
+
+    // Launching Play Here while on var2 anchors Play Mode at var2 FEN & cached eval
+    store.startPlayMode("board");
+    let pm = useReviewStore.getState().playMode;
+    expect(pm.active).toBe(true);
+    expect(pm.fen).toBe(node2Fen);
+    expect(pm.evalWhiteCp).toBe(42);
+    store.exitPlayMode();
+
+    // Stepping prevMove steps back to 1...c5, then back to mainline ply 1 (activeVariationNodeId === null)
+    store.jumpToVariationNode(var2.nodeId!);
+    store.prevMove();
+    expect(useReviewStore.getState().activeVariationNodeId).toBe(var1.nodeId);
+    store.prevMove();
+    expect(useReviewStore.getState().activeVariationNodeId).toBeNull();
+    expect(useReviewStore.getState().currentPly).toBe(1);
+
+    // Stepping nextMove from ply 1 advances along mainline to ply 2
+    store.nextMove();
+    expect(useReviewStore.getState().currentPly).toBe(2);
+
+    // Clicking back into var1 and stepping nextMove follows variation forward to var2
+    store.jumpToVariationNode(var1.nodeId!);
+    store.nextMove();
+    expect(useReviewStore.getState().activeVariationNodeId).toBe(var2.nodeId);
+
+    // Explore PV line into tree off ply 1 (e.g. 1...Nf6 2. e5 Nd5) and promote it
+    const importedId = store.explorePvLineInTree({
+      anchorPly: 1,
+      sanMoves: ["Nf6", "e5", "Nd5"],
+      stepIndex: 1,
+    });
+    expect(importedId).toBeTruthy();
+    expect(useReviewStore.getState().activeVariationNodeId).toBe(importedId);
+    const rootNf6Id = useReviewStore.getState().variationTree.nodes[importedId!].parentId!;
+    store.promoteVariationById(rootNf6Id);
+    expect(useReviewStore.getState().variationTree.rootsByAnchorPly[1][0]).toBe(rootNf6Id);
+
+    // Deleting active branch falls back cleanly to anchorPly 1 mainline
+    store.deleteVariationBranchById(rootNf6Id);
+    expect(useReviewStore.getState().activeVariationNodeId).toBeNull();
+    expect(useReviewStore.getState().currentPly).toBe(1);
+    expect(useReviewStore.getState().variationTree.nodes[importedId!]).toBeUndefined();
+
+    // setAnalysis resets variation tree cleanly
+    store.setAnalysis(fixture);
+    expect(Object.keys(useReviewStore.getState().variationTree.nodes)).toHaveLength(0);
+  });
+
+  it("handles playAnalysisMove guards, promotions, sibling deletion preservation, clearVariationTree, and startPlayMode eval seeding", () => {
+    const baseStore = useReviewStore.getState();
+    baseStore.reset();
+
+    // Without analysis, playAnalysisMove rejects cleanly
+    expect(useReviewStore.getState().playAnalysisMove("e2", "e4")).toEqual({ moved: false });
+
+    const startFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    const afterE4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+    const afterE4E5 = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2";
+    const promoAnalysis = {
+      headers: { White: "W", Black: "B" },
+      opening: {
+        opening: {
+          eco: "C20",
+          name: "King's Pawn Game",
+          moves: "1. e4 e5",
+          fenKey: afterE4E5,
+        },
+        bookPlies: 2,
+        outOfBookPly: 2,
+        outOfBookMoveNumber: 1,
+        plyIsBook: [true, true],
+        plyOpenings: [null, null],
+        insight: "",
+      },
+      summary: {
+        white: {
+          accuracy: 90,
+          estimatedElo: 1250,
+          badgeCounts: {
+            Brilliant: 0, Great: 0, Best: 1, Excellent: 0, Good: 0,
+            Book: 0, Inaccuracy: 0, Mistake: 0, Miss: 0, Blunder: 0, Forced: 0,
+          },
+          phaseAccuracies: { opening: 90, middlegame: 90, endgame: 90 },
+        },
+        black: {
+          accuracy: 85,
+          estimatedElo: 1150,
+          badgeCounts: {
+            Brilliant: 0, Great: 0, Best: 1, Excellent: 0, Good: 0,
+            Book: 0, Inaccuracy: 0, Mistake: 0, Miss: 0, Blunder: 0, Forced: 0,
+          },
+          phaseAccuracies: { opening: 85, middlegame: 85, endgame: 85 },
+        },
+      },
+      startFen,
+      startEval: {
+        whiteCp: 22,
+        whiteMate: undefined,
+        evalLabel: "+0.22",
+        pvLines: [{ multipv: 1, cp: 22, pvUci: ["e2e4"], pvSan: ["e4"] }],
+      },
+      moves: [
+        {
+          ply: 1,
+          moveNumber: 1,
+          color: "w" as const,
+          san: "e4",
+          uci: "e2e4",
+          from: "e2" as const,
+          to: "e4" as const,
+          fenBefore: startFen,
+          fenAfter: afterE4,
+          whiteCp: 30,
+          evalLabel: "+0.30",
+          bestMoveUci: "e2e4",
+          bestMoveSan: "e4",
+          bestMovePvSan: ["e4"],
+          altPvSan: [],
+          materialSacrificed: 0,
+          classification: {
+            badge: "Best" as const,
+            deltaWP: 0,
+            accuracy: 100,
+            color: "#96bc4b",
+            symbol: "★",
+            isBlunder: false,
+            isKeyMoment: false,
+          },
+          tacticalContext: {
+            gamePhase: "Opening" as const,
+            tags: [],
+            isCheck: false,
+            isCastle: false,
+          },
+          pvLines: [],
+        },
+        {
+          ply: 2,
+          moveNumber: 1,
+          color: "b" as const,
+          san: "e5",
+          uci: "e7e5",
+          from: "e7" as const,
+          to: "e5" as const,
+          fenBefore: afterE4,
+          fenAfter: afterE4E5,
+          whiteCp: 45,
+          evalLabel: "+0.45",
+          bestMoveUci: "c7c5",
+          bestMoveSan: "c5",
+          bestMovePvSan: ["c5"],
+          altPvSan: [],
+          materialSacrificed: 0,
+          classification: {
+            badge: "Inaccuracy" as const,
+            deltaWP: 3,
+            accuracy: 85,
+            color: "#e58f2a",
+            symbol: "?!",
+            isBlunder: false,
+            isKeyMoment: false,
+          },
+          tacticalContext: {
+            gamePhase: "Opening" as const,
+            tags: [],
+            isCheck: false,
+            isCastle: false,
+          },
+          pvLines: [],
+        },
+      ],
+    };
+
+    baseStore.setAnalysis(promoAnalysis);
+
+    // At ply 0, illegal move rejects & jumpToVariationNode("missing") is a no-op
+    expect(useReviewStore.getState().playAnalysisMove("e2", "e5")).toEqual({ moved: false });
+    useReviewStore.getState().jumpToVariationNode("missing-var-id");
+    expect(useReviewStore.getState().activeVariationNodeId).toBeNull();
+
+    // Start Play Mode from mainline ply 0 seeds from startEval.whiteCp (22)
+    useReviewStore.setState({ showBestMove: true });
+    useReviewStore.getState().startPlayMode("board");
+    expect(useReviewStore.getState().playMode.active).toBe(true);
+    expect(useReviewStore.getState().playMode.anchorWhiteCp).toBe(22);
+    expect(useReviewStore.getState().playMode.evalWhiteCp).toBe(22);
+    expect(useReviewStore.getState().playMode.isEvaluatingMove).toBe(false);
+    expect(useReviewStore.getState().showBestMove).toBe(false);
+    useReviewStore.getState().exitPlayMode();
+
+    // Jump to ply 1 and seed Play Mode from mainline move whiteCp (30)
+    useReviewStore.getState().jumpToPly(1);
+    useReviewStore.getState().startPlayMode("board");
+    expect(useReviewStore.getState().playMode.anchorWhiteCp).toBe(30);
+    expect(useReviewStore.getState().playMode.evalWhiteCp).toBe(30);
+    useReviewStore.getState().exitPlayMode();
+
+    // Create two root variations off ply 1: 1...c5 -> 2. Nf3 and sibling 1...d5
+    useReviewStore.getState().jumpToPly(1);
+    const varC5 = useReviewStore.getState().playAnalysisMove("c7", "c5");
+    expect(varC5).toMatchObject({ moved: true, mode: "variation" });
+    const c5NodeId = varC5.nodeId!;
+
+    // Illegal move inside active variation returns { moved: false }
+    expect(useReviewStore.getState().playAnalysisMove("a1", "a8")).toEqual({ moved: false });
+
+    const varNf3 = useReviewStore.getState().playAnalysisMove("g1", "f3");
+    const nf3NodeId = varNf3.nodeId!;
+
+    // Jumping out, deleting sibling should preserve active branch if activeStillExists
+    useReviewStore.getState().jumpToPly(1);
+    const varD5 = useReviewStore.getState().playAnalysisMove("d7", "d5");
+    const d5NodeId = varD5.nodeId!;
+
+    useReviewStore.setState({ showBestMove: true });
+    useReviewStore.getState().jumpToVariationNode(nf3NodeId);
+    expect(useReviewStore.getState().showBestMove).toBe(false);
+
+    // prevMove from child returns to parent (c5) and clears showBestMove
+    useReviewStore.setState({ showBestMove: true });
+    useReviewStore.getState().prevMove();
+    expect(useReviewStore.getState().activeVariationNodeId).toBe(c5NodeId);
+    expect(useReviewStore.getState().showBestMove).toBe(false);
+
+    // nextMove steps back forward into nf3 and clears showBestMove
+    useReviewStore.setState({ showBestMove: true });
+    useReviewStore.getState().nextMove();
+    expect(useReviewStore.getState().activeVariationNodeId).toBe(nf3NodeId);
+    expect(useReviewStore.getState().showBestMove).toBe(false);
+
+    // Deleting unrelated sibling d5 keeps active branch nf3 untouched
+    useReviewStore.getState().deleteVariationBranchById(d5NodeId);
+    expect(useReviewStore.getState().activeVariationNodeId).toBe(nf3NodeId);
+
+    // Attach eval to active variation node & verify startPlayMode seeds from it
+    const activeFen = useReviewStore.getState().variationTree.nodes[nf3NodeId].fenAfter;
+    useReviewStore.getState().attachVariationEval(nf3NodeId, {
+      fen: activeFen,
+      depth: 14,
+      bestMoveUci: "d2d4",
+      bestMoveSan: "d4",
+      whiteCp: 245,
+      whiteMate: 4,
+      lines: [],
+    });
+    useReviewStore.getState().startPlayMode("board");
+    expect(useReviewStore.getState().playMode.anchorWhiteCp).toBe(245);
+    expect(useReviewStore.getState().playMode.anchorWhiteMate).toBe(4);
+    expect(useReviewStore.getState().playMode.evalWhiteCp).toBe(245);
+    expect(useReviewStore.getState().playMode.evalWhiteMate).toBe(4);
+    expect(useReviewStore.getState().playMode.currentEval?.whiteCp).toBe(245);
+    expect(useReviewStore.getState().playMode.fen).toBe(activeFen);
+    useReviewStore.getState().exitPlayMode();
+
+    // Stepping back twice from nf3 -> c5 -> mainline anchorPly 1
+    useReviewStore.getState().prevMove();
+    useReviewStore.getState().prevMove();
+    expect(useReviewStore.getState().activeVariationNodeId).toBeNull();
+    expect(useReviewStore.getState().currentPly).toBe(1);
+
+    // clearVariationTree wipes all variation nodes cleanly
+    useReviewStore.getState().jumpToVariationNode(nf3NodeId);
+    useReviewStore.getState().clearVariationTree();
+    expect(Object.keys(useReviewStore.getState().variationTree.nodes)).toHaveLength(0);
+    expect(useReviewStore.getState().activeVariationNodeId).toBeNull();
+  });
+
+  it("supports pawn promotion & auto-queen in playAnalysisMove from a custom FEN endgame", () => {
+    const promoStore = useReviewStore.getState();
+    promoStore.reset();
+    const promoStart = "4k3/P7/8/8/8/8/8/4K3 w - - 0 1";
+    const promoAfterQ = "Q3k3/8/8/8/8/8/8/4K3 b - - 0 1";
+    promoStore.setAnalysis({
+      headers: { White: "W", Black: "B" },
+      opening: {
+        opening: null,
+        bookPlies: 0,
+        outOfBookPly: 0,
+        outOfBookMoveNumber: 1,
+        plyIsBook: [false],
+        plyOpenings: [null],
+        insight: "",
+      },
+      summary: {
+        white: {
+          accuracy: 100, estimatedElo: 1500,
+          badgeCounts: { Brilliant: 0, Great: 0, Best: 1, Excellent: 0, Good: 0, Book: 0, Inaccuracy: 0, Mistake: 0, Miss: 0, Blunder: 0, Forced: 0 },
+          phaseAccuracies: { opening: 100, middlegame: 100, endgame: 100 },
+        },
+        black: {
+          accuracy: 100, estimatedElo: 1500,
+          badgeCounts: { Brilliant: 0, Great: 0, Best: 0, Excellent: 0, Good: 0, Book: 0, Inaccuracy: 0, Mistake: 0, Miss: 0, Blunder: 0, Forced: 0 },
+          phaseAccuracies: { opening: 100, middlegame: 100, endgame: 100 },
+        },
+      },
+      startFen: promoStart,
+      moves: [
+        {
+          ply: 1,
+          moveNumber: 1,
+          color: "w",
+          san: "Ke2",
+          uci: "e1e2",
+          from: "e1",
+          to: "e2",
+          fenBefore: promoStart,
+          fenAfter: promoAfterQ,
+          whiteCp: 0,
+          evalLabel: "0.00",
+          bestMoveUci: "a7a8q",
+          bestMoveSan: "a8=Q+",
+          bestMovePvSan: ["a8=Q+"],
+          altPvSan: [],
+          materialSacrificed: 0,
+          classification: {
+            badge: "Best",
+            deltaWP: 0,
+            accuracy: 100,
+            color: "#96bc4b",
+            symbol: "★",
+            isBlunder: false,
+            isKeyMoment: false,
+          },
+          tacticalContext: { gamePhase: "Endgame", tags: [], isCheck: false, isCastle: false },
+        },
+      ],
+    });
+
+    // At ply 0, omit promotion triggers auto-queen mainline mismatch -> creates variation a8=Q+
+    const autoPromo = useReviewStore.getState().playAnalysisMove("a7", "a8");
+    expect(autoPromo).toMatchObject({ moved: true, mode: "variation" });
+    expect(useReviewStore.getState().variationTree.nodes[autoPromo.nodeId!].uci).toBe("a7a8q");
+
+    // Explicit knight underpromotion at ply 0 creates distinct branch a8=N
+    useReviewStore.getState().jumpToPly(0);
+    const explicitUnderpromo = useReviewStore.getState().playAnalysisMove("a7", "a8", "n");
+    expect(explicitUnderpromo).toMatchObject({ moved: true, mode: "variation" });
+    expect(useReviewStore.getState().variationTree.nodes[explicitUnderpromo.nodeId!].san).toBe("a8=N");
+
+    // M1: Deleting any branch while viewing mainline preserves activeVariationNodeId=null and currentPly
+    useReviewStore.getState().jumpToPly(1);
+    const branchToDeleteId = explicitUnderpromo.nodeId!;
+    useReviewStore.getState().deleteVariationBranchById(branchToDeleteId);
+    expect(useReviewStore.getState().activeVariationNodeId).toBeNull();
+    expect(useReviewStore.getState().currentPly).toBe(1);
+
+    // H5: startPlayMode("before-move") clears any lingering activeVariationNodeId
+    useReviewStore.getState().jumpToPly(0);
+    const secondVar = useReviewStore.getState().playAnalysisMove("a7", "a8");
+    expect(secondVar).toMatchObject({ moved: true, mode: "variation" });
+    expect(useReviewStore.getState().activeVariationNodeId).toBe(secondVar.nodeId);
+    useReviewStore.getState().startPlayMode("before-move");
+    expect(useReviewStore.getState().activeVariationNodeId).toBeNull();
+    useReviewStore.getState().exitPlayMode();
+    expect(useReviewStore.getState().activeVariationNodeId).toBeNull();
+  });
 });

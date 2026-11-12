@@ -354,6 +354,54 @@ const MUTANTS = [
     replacement: `      const directCapture = true;`,
     testFile: "tests/gemini-coach.test.ts",
   },
+  {
+    name: "M47: Bypass castling-rights eligibility check in isTablebaseEligible in tablebase.ts",
+    file: "src/lib/engine/tablebase.ts",
+    target: '  if (parts[2] !== "-") return false;',
+    replacement: "  if (false) return false;",
+    testFile: "tests/tablebase.test.ts",
+  },
+  {
+    name: "M48: Invert mover outcome category mapping in invertTablebaseCategory in tablebase.ts",
+    file: "src/lib/engine/tablebase.ts",
+    target: `    case "win":
+      return "loss";
+    case "loss":
+      return "win";`,
+    replacement: `    case "win":
+      return "win";
+    case "loss":
+      return "loss";`,
+    testFile: "tests/tablebase.test.ts",
+  },
+  {
+    name: "M49: Disable sibling node deduplication in playVariationMove in variation-tree.ts",
+    file: "src/lib/analysis/variation-tree.ts",
+    target: "      if (existing && existing.uci === uci) {",
+    replacement: "      if (false) {",
+    testFile: "tests/variation-tree.test.ts",
+  },
+  {
+    name: "M50: Break mainline-follow detection in playAnalysisMove in useReviewStore.ts",
+    file: "src/lib/store/useReviewStore.ts",
+    target: "if (playedUci === nextMain.uci) {",
+    replacement: "if (false) {",
+    testFile: "tests/use-review-store.test.ts",
+  },
+  {
+    name: "M51: Bypass pre-aborted AbortSignal short-circuit in querySyzygyTablebase in tablebase.ts",
+    file: "src/lib/engine/tablebase.ts",
+    target: "  if (options?.signal?.aborted) return null;",
+    replacement: "  if (false) return null;",
+    testFile: "tests/tablebase.test.ts",
+  },
+  {
+    name: "M52: Corrupt mainline state when deleting variation in deleteVariationBranchById in useReviewStore.ts",
+    file: "src/lib/store/useReviewStore.ts",
+    target: "      if (state.activeVariationNodeId === null) {",
+    replacement: "      if (false) {",
+    testFile: "tests/use-review-store.test.ts",
+  },
 ];
 
 let killed = 0;

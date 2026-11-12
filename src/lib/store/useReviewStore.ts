@@ -8,6 +8,16 @@ import type {
 import type { CoachPersonaId } from "@/lib/ai/coach-personas";
 import type { PositionEval } from "@/lib/engine/engine-evaluator";
 import {
+  addVariationLine,
+  attachVariationNodeEval,
+  createEmptyVariationTree,
+  deleteVariationBranch,
+  getStepForwardTarget,
+  playVariationMove,
+  promoteVariationChild,
+  type VariationTreeState,
+} from "@/lib/analysis/variation-tree";
+import {
   DEFAULT_CHESS_START_FEN,
   PLAY_DEFAULT_FALLBACK_ELO,
   clampPlayElo,
@@ -101,6 +111,8 @@ export interface ReviewStoreState {
   storyline: GameStorylineResponse | null;
   retryState: RetryState;
   playMode: PlayModeState;
+  variationTree: VariationTreeState;
+  activeVariationNodeId: string | null;
 
   setPgnInput: (pgn: string) => void;
   setAnalyzing: (completed?: number, total?: number) => void;
@@ -115,12 +127,29 @@ export interface ReviewStoreState {
   clearExplanations: () => void;
 
   jumpToPly: (ply: number) => void;
+  jumpToVariationNode: (nodeId: string) => void;
   goToStart: () => void;
   prevMove: () => void;
   nextMove: () => void;
   goToEnd: () => void;
   nextKeyMoment: () => void;
   flipBoard: () => void;
+
+  playAnalysisMove: (
+    from: string,
+    to: string,
+    promotion?: string
+  ) => { moved: boolean; mode?: "mainline" | "variation"; nodeId?: string };
+  explorePvLineInTree: (input: {
+    anchorPly: number;
+    sanMoves: string[];
+    stepIndex?: number;
+    parentNodeId?: string | null;
+  }) => string | null;
+  attachVariationEval: (nodeId: string, posEval: PositionEval) => void;
+  deleteVariationBranchById: (nodeId: string) => void;
+  promoteVariationById: (nodeId: string) => void;
+  clearVariationTree: () => void;
 
   toggleShowBestMove: () => void;
   stepBestMoveLine: (delta: number) => void;
@@ -212,6 +241,8 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   storyline: null,
   retryState: INITIAL_RETRY_STATE,
   playMode: INITIAL_PLAY_MODE_STATE,
+  variationTree: createEmptyVariationTree(),
+  activeVariationNodeId: null,
 
   setPgnInput: (pgn) => set({ pgnInput: pgn }),
 
@@ -227,6 +258,8 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       analysis: null,
       analysisStatus: "error",
       analysisError: message,
+      activeVariationNodeId: null,
+      variationTree: createEmptyVariationTree(),
       playMode: INITIAL_PLAY_MODE_STATE,
     }),
 
@@ -236,6 +269,8 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       analysisStatus: "complete",
       analysisError: null,
       currentPly: 0,
+      activeVariationNodeId: null,
+      variationTree: createEmptyVariationTree(),
       showBestMove: false,
       bestMovePreviewIndex: 0,
       explanations: {},
@@ -275,6 +310,20 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
     const clamped = Math.max(0, Math.min(maxPly, ply));
     set({
       currentPly: clamped,
+      activeVariationNodeId: null,
+      showBestMove: false,
+      bestMovePreviewIndex: 0,
+      retryState: INITIAL_RETRY_STATE,
+    });
+  },
+
+  jumpToVariationNode: (nodeId) => {
+    const { variationTree } = get();
+    const node = variationTree.nodes[nodeId];
+    if (!node) return;
+    set({
+      currentPly: node.anchorPly,
+      activeVariationNodeId: nodeId,
       showBestMove: false,
       bestMovePreviewIndex: 0,
       retryState: INITIAL_RETRY_STATE,
@@ -284,14 +333,190 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   goToStart: () => get().jumpToPly(0),
 
   prevMove: () => {
-    const { currentPly } = get();
+    const { currentPly, activeVariationNodeId, variationTree } = get();
+    if (activeVariationNodeId) {
+      const node = variationTree.nodes[activeVariationNodeId];
+      if (node?.parentId && variationTree.nodes[node.parentId]) {
+        set({
+          currentPly: node.anchorPly,
+          activeVariationNodeId: node.parentId,
+          showBestMove: false,
+          bestMovePreviewIndex: 0,
+          retryState: INITIAL_RETRY_STATE,
+        });
+        return;
+      }
+      get().jumpToPly(node ? node.anchorPly : currentPly);
+      return;
+    }
     get().jumpToPly(currentPly - 1);
   },
 
   nextMove: () => {
-    const { currentPly } = get();
+    const { currentPly, activeVariationNodeId, variationTree } = get();
+    if (activeVariationNodeId) {
+      const childId = getStepForwardTarget(variationTree, activeVariationNodeId, null);
+      if (childId) {
+        set({
+          activeVariationNodeId: childId,
+          showBestMove: false,
+          bestMovePreviewIndex: 0,
+          retryState: INITIAL_RETRY_STATE,
+        });
+      }
+      return;
+    }
     get().jumpToPly(currentPly + 1);
   },
+
+  playAnalysisMove: (from, to, promotion) => {
+    const { analysis, currentPly, activeVariationNodeId, variationTree } = get();
+    if (!analysis) return { moved: false };
+
+    if (!activeVariationNodeId) {
+      const anchorFen =
+        currentPly === 0
+          ? analysis.startFen
+          : analysis.moves[currentPly - 1]?.fenAfter ?? analysis.startFen;
+      const nextMain = analysis.moves[currentPly];
+      if (nextMain) {
+        try {
+          const probe = new Chess(anchorFen);
+          const attempt = promotion
+            ? probe.move({ from, to, promotion })
+            : (() => {
+                try {
+                  return probe.move({ from, to });
+                } catch {
+                  return probe.move({ from, to, promotion: "q" });
+                }
+              })();
+          if (attempt) {
+            const playedUci = `${attempt.from}${attempt.to}${attempt.promotion ?? ""}`;
+            if (playedUci === nextMain.uci) {
+              get().jumpToPly(currentPly + 1);
+              return { moved: true, mode: "mainline" };
+            }
+          }
+        } catch {
+          // Illegal move handled cleanly below
+        }
+      }
+
+      const res = playVariationMove(variationTree, {
+        anchorPly: currentPly,
+        anchorFen,
+        parentId: null,
+        from,
+        to,
+        promotion,
+      });
+      if (!res.moved || !res.node) return { moved: false };
+      set({
+        variationTree: res.tree,
+        activeVariationNodeId: res.node.id,
+        showBestMove: false,
+        bestMovePreviewIndex: 0,
+        retryState: INITIAL_RETRY_STATE,
+      });
+      return { moved: true, mode: "variation", nodeId: res.node.id };
+    }
+
+    const activeNode = variationTree.nodes[activeVariationNodeId];
+    if (!activeNode) return { moved: false };
+
+    const res = playVariationMove(variationTree, {
+      anchorPly: activeNode.anchorPly,
+      anchorFen: activeNode.fenAfter,
+      parentId: activeNode.id,
+      from,
+      to,
+      promotion,
+    });
+    if (!res.moved || !res.node) return { moved: false };
+    set({
+      variationTree: res.tree,
+      activeVariationNodeId: res.node.id,
+      showBestMove: false,
+      bestMovePreviewIndex: 0,
+      retryState: INITIAL_RETRY_STATE,
+    });
+    return { moved: true, mode: "variation", nodeId: res.node.id };
+  },
+
+  explorePvLineInTree: ({ anchorPly, sanMoves, stepIndex = 0, parentNodeId = null }) => {
+    const { analysis, variationTree } = get();
+    if (!analysis || sanMoves.length === 0) return null;
+
+    const clampedAnchor = Math.max(0, Math.min(analysis.moves.length, anchorPly));
+    const anchorFen =
+      clampedAnchor === 0
+        ? analysis.startFen
+        : analysis.moves[clampedAnchor - 1]?.fenAfter ?? analysis.startFen;
+
+    const parentNode = parentNodeId ? variationTree.nodes[parentNodeId] : undefined;
+    const res = addVariationLine(variationTree, {
+      anchorPly: parentNode ? parentNode.anchorPly : clampedAnchor,
+      anchorFen,
+      parentId: parentNode ? parentNode.id : null,
+      sanMoves,
+    });
+    if (res.nodeIds.length === 0) return null;
+
+    const targetId =
+      res.nodeIds[Math.max(0, Math.min(res.nodeIds.length - 1, stepIndex))];
+    const targetNode = res.tree.nodes[targetId];
+    if (!targetNode) return null;
+
+    set({
+      variationTree: res.tree,
+      currentPly: targetNode.anchorPly,
+      activeVariationNodeId: targetId,
+      showBestMove: false,
+      bestMovePreviewIndex: 0,
+      retryState: INITIAL_RETRY_STATE,
+    });
+    return targetId;
+  },
+
+  attachVariationEval: (nodeId, posEval) =>
+    set((state) => ({
+      variationTree: attachVariationNodeEval(state.variationTree, nodeId, posEval),
+    })),
+
+  deleteVariationBranchById: (nodeId) =>
+    set((state) => {
+      const del = deleteVariationBranch(state.variationTree, nodeId);
+      if (state.activeVariationNodeId === null) {
+        return {
+          variationTree: del.tree,
+          activeVariationNodeId: null,
+          currentPly: state.currentPly,
+        };
+      }
+      const activeStillExists = Boolean(del.tree.nodes[state.activeVariationNodeId]);
+      return {
+        variationTree: del.tree,
+        activeVariationNodeId: activeStillExists
+          ? state.activeVariationNodeId
+          : del.fallbackParentId,
+        currentPly:
+          activeStillExists || del.fallbackAnchorPly === null
+            ? state.currentPly
+            : del.fallbackAnchorPly,
+      };
+    }),
+
+  promoteVariationById: (nodeId) =>
+    set((state) => ({
+      variationTree: promoteVariationChild(state.variationTree, nodeId),
+    })),
+
+  clearVariationTree: () =>
+    set({
+      variationTree: createEmptyVariationTree(),
+      activeVariationNodeId: null,
+    }),
 
   goToEnd: () => {
     const { analysis } = get();
@@ -466,11 +691,18 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   },
 
   startPlayMode: (mode = "board", activeCustomFen = null) => {
-    const { analysis, currentPly, coachColor } = get();
+    const { analysis, currentPly, coachColor, activeVariationNodeId, variationTree } = get();
+    const activeVarNode =
+      mode === "board" && activeVariationNodeId
+        ? variationTree.nodes[activeVariationNodeId]
+        : undefined;
+    const effectiveCustomFen =
+      activeCustomFen ?? (activeVarNode ? activeVarNode.fenAfter : null);
+
     const anchor = resolvePlayAnchor({
       analysis,
       currentPly,
-      activeCustomFen,
+      activeCustomFen: effectiveCustomFen,
       coachColor,
       startMode: mode,
     });
@@ -478,7 +710,13 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
 
     let initialWhiteCp = 0;
     let initialWhiteMate: number | undefined;
-    if (analysis && !activeCustomFen) {
+    let initialEval: PositionEval | null = null;
+
+    if (activeVarNode?.eval && activeVarNode.fenAfter === anchor.fen) {
+      initialEval = activeVarNode.eval;
+      initialWhiteCp = activeVarNode.eval.whiteCp;
+      initialWhiteMate = activeVarNode.eval.whiteMate;
+    } else if (analysis && !effectiveCustomFen) {
       if (anchor.anchorPly === 0) {
         initialWhiteCp = analysis.startEval?.whiteCp ?? 0;
         initialWhiteMate = analysis.startEval?.whiteMate;
@@ -495,6 +733,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
     const engineToMoveFirst = !gameOver && getFenTurn(anchor.fen) !== anchor.userColor;
 
     set({
+      ...(mode === "before-move" ? { activeVariationNodeId: null } : {}),
       showBestMove: false,
       bestMovePreviewIndex: 0,
       retryState: INITIAL_RETRY_STATE,
@@ -514,7 +753,7 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
         moves: [],
         undoStack: [],
         lastMove: null,
-        currentEval: null,
+        currentEval: initialEval,
         evalWhiteCp: initialWhiteCp,
         evalWhiteMate: initialWhiteMate,
         isThinking: engineToMoveFirst,
@@ -797,6 +1036,8 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
       analysisError: null,
       analysis: null,
       currentPly: 0,
+      activeVariationNodeId: null,
+      variationTree: createEmptyVariationTree(),
       boardFlipped: false,
       showBestMove: false,
       bestMovePreviewIndex: 0,
