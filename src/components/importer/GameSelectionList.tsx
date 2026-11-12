@@ -24,7 +24,7 @@ function TimeIcon({ timeClass }: { timeClass: string }) {
 
 export function GameSelectionList({ games, onSelectGame }: GameSelectionListProps) {
   return (
-    <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+    <div data-testid="chesscom-game-list" className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
       {games.map((g) => {
         const badgeStyles =
           g.result === "win"
@@ -36,6 +36,7 @@ export function GameSelectionList({ games, onSelectGame }: GameSelectionListProp
         return (
           <button
             key={g.id}
+            data-testid="chesscom-game-item"
             type="button"
             onClick={() => onSelectGame(g.pgn, { userColor: g.userColor })}
             className="flex w-full items-center justify-between gap-2 rounded border border-[#3d3b38] bg-[#21201d] px-2.5 py-2 text-left transition hover:border-[#96bc4b] hover:bg-[#2d2b28]"
